@@ -1,0 +1,5 @@
+status,ticker,shares,cost_basis,date_acquired,notes
+hold,AAPL,50,142.30,2024-03-15,Long-term hold
+hold,MSFT,25,378.50,2024-06-01
+hold,NVDA,10,485.00,2024-09-20,AI exposure
+watch,GOOGL,0,0,,Waiting for pullback

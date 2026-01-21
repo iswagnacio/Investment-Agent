@@ -1,0 +1,7 @@
+Company: {company_name}
+Sector: {sector}
+
+Calculated Metrics:
+{metrics_summary}
+
+Provide your analysis.
