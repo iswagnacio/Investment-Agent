@@ -6,7 +6,7 @@ from langchain.prompts import PromptTemplate
 from typing import List
 import json
 
-from portfolio_manager import PortfolioManager
+from portfolio import PortfolioManager
 from dotenv import load_dotenv
 load_dotenv()
 

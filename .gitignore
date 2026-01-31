@@ -2,3 +2,5 @@
 .DS_Store
 __pycache__/
 yfinance_cache.sqlite
+data/
+.yf_cache/
