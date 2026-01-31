@@ -1,13 +1,13 @@
-# technical_analyzer_agent.py
-
 from langchain_anthropic import ChatAnthropic
 from langchain.prompts import PromptTemplate
 from typing import Dict, List
 import json
+from dotenv import load_dotenv
 import os
 
 from technical import TechnicalCalculator
 
+load_dotenv()
 
 class TechnicalAnalyzerAgent:
     """
@@ -15,7 +15,7 @@ class TechnicalAnalyzerAgent:
     based on stock characteristics (sector, industry, size).
     """
     
-    def __init__(self, model: str = "claude-4-5-sonnet-20241022"):
+    def __init__(self, model: str = "claude-sonnet-4-5"):
         if not os.getenv("ANTHROPIC_API_KEY"):
             raise ValueError("ANTHROPIC_API_KEY environment variable not set")
         

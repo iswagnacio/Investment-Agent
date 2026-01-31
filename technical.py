@@ -1,6 +1,4 @@
-# technical_analyzer.py
-
-import yfinance_cache as yfc  # Drop-in replacement for yfinance with built-in caching
+import yfinance_cache as yfc  
 import pandas as pd
 import numpy as np
 from typing import Dict

@@ -1,0 +1,381 @@
+{
+  "identifier": "company_AAPL",
+  "category": "company",
+  "cached_at": "2026-01-31T12:32:40.360270",
+  "items": [
+    {
+      "title": "Cantor Fitzgerald lowers Tenable stock price target to $30 on federal concerns",
+      "content": "Cantor Fitzgerald has lowered its price target for Tenable (NASDAQ:TENB), a cybersecurity company, to $30 from $42, citing software multiple contraction and federal visibility concerns, including a potential government shutdown. Despite the reduced target, the firm maintains an \"Overweight\" rating, viewing Tenable as a value play due to its Tenable One platform, M&A activities, and growing demand for cloud security. Other analysts like DA Davidson, Truist Securities, Needham, and Stifel have also recently adjusted their price targets for Tenable, highlighting ongoing evaluations of the company's financial and strategic initiatives.",
+      "source": "Investing.com",
+      "source_type": "alphavantage",
+      "published_at": "2026-01-31T12:32:35.296112",
+      "url": "https://www.investing.com/news/analyst-ratings/cantor-fitzgerald-lowers-tenable-stock-price-target-to-30-on-federal-concerns-93CH-4477034",
+      "category": "company",
+      "ticker": "AAPL",
+      "industry": null,
+      "sentiment_hint": 0.041401,
+      "keywords": [
+        "earnings",
+        "financial_markets",
+        "technology",
+        "economy_fiscal"
+      ],
+      "metadata": {
+        "sentiment_label": "Neutral",
+        "ticker_sentiments": {
+          "TENB": {
+            "relevance": 1.0,
+            "sentiment": -0.231967,
+            "label": "Somewhat-Bearish"
+          },
+          "NVDA": {
+            "relevance": 0.643088,
+            "sentiment": -0.208413,
+            "label": "Somewhat-Bearish"
+          },
+          "TSLA": {
+            "relevance": 0.624551,
+            "sentiment": 0.329541,
+            "label": "Somewhat-Bullish"
+          },
+          "AAPL": {
+            "relevance": 0.643999,
+            "sentiment": 0.245107,
+            "label": "Somewhat-Bullish"
+          }
+        }
+      }
+    },
+    {
+      "title": "M&T Bank Corp stock hits 52-week high at $222.21 By Investing.com",
+      "content": "M&T Bank Corp (MTB) recently reached a new 52-week high of $222.21, reflecting a 10.32% increase over the past year due to strong financial results and positive investor sentiment. The bank's fourth-quarter earnings exceeded analyst expectations with EPS of $4.72, and its revenue aligned with projections at $2.47 billion. RBC Capital has also raised its price target for M&T Bank to $220, maintaining an Outperform rating due to its robust business model.",
+      "source": "Investing.com Canada",
+      "source_type": "alphavantage",
+      "published_at": "2026-01-31T12:32:35.296087",
+      "url": "https://ca.investing.com/news/company-news/mt-bank-corp-stock-hits-52week-high-at-22221-93CH-4430124",
+      "category": "company",
+      "ticker": "AAPL",
+      "industry": null,
+      "sentiment_hint": 0.139214,
+      "keywords": [
+        "earnings",
+        "financial_markets",
+        "finance"
+      ],
+      "metadata": {
+        "sentiment_label": "Neutral",
+        "ticker_sentiments": {
+          "MTB": {
+            "relevance": 1.0,
+            "sentiment": 0.47392,
+            "label": "Bullish"
+          },
+          "AVGO": {
+            "relevance": 0.564003,
+            "sentiment": 0.012189,
+            "label": "Neutral"
+          },
+          "AAPL": {
+            "relevance": 0.558275,
+            "sentiment": 0.025547,
+            "label": "Neutral"
+          },
+          "TSLA": {
+            "relevance": 0.557014,
+            "sentiment": 0.037838,
+            "label": "Neutral"
+          }
+        }
+      }
+    },
+    {
+      "title": "Lam Research stock slips nearly 6% after-hours as chip-tool trade cools \u2014 what\u2019s driving LRCX now",
+      "content": "Lam Research stock (LRCX) dipped nearly 6% after-hours despite an optimistic outlook due to broader market jitters following President Trump's Fed chair nomination and mixed earnings reports. The decline in chip-tool stocks, including LRCX, is being watched as a barometer for continued investment in new chip manufacturing equipment, which has been fueled by AI demand. Despite strong guidance for Q3 and a record year driven by demand for complex chip designs, the company\u2019s vulnerability to shifts in regional demand, particularly from China, remains a factor.",
+      "source": "TechStock\u00b2",
+      "source_type": "alphavantage",
+      "published_at": "2026-01-31T12:32:35.296060",
+      "url": "https://ts2.tech/en/lam-research-stock-slips-nearly-6-after-hours-as-chip-tool-trade-cools-whats-driving-lrcx-now/",
+      "category": "company",
+      "ticker": "AAPL",
+      "industry": null,
+      "sentiment_hint": -0.151065,
+      "keywords": [
+        "earnings",
+        "financial_markets",
+        "technology"
+      ],
+      "metadata": {
+        "sentiment_label": "Somewhat-Bearish",
+        "ticker_sentiments": {
+          "LRCX": {
+            "relevance": 1.0,
+            "sentiment": -0.445434,
+            "label": "Bearish"
+          },
+          "KLAC": {
+            "relevance": 0.740696,
+            "sentiment": -0.202505,
+            "label": "Somewhat-Bearish"
+          },
+          "AAPL": {
+            "relevance": 0.610857,
+            "sentiment": 0.232609,
+            "label": "Somewhat-Bullish"
+          }
+        }
+      }
+    },
+    {
+      "title": "NVIDIA Overtakes Apple: ETFs to Tap the Incredible Growth Story",
+      "content": "NVIDIA has surpassed Apple in market capitalization, reaching over $3 trillion, driven by the AI frenzy and strong earnings. The company's upcoming 10-for-1 stock split and new AI chip platforms are expected to further boost its growth. Investors can gain exposure to NVIDIA's incredible growth story through several ETFs that have significant allocations to the chipmaker.",
+      "source": "TradingView",
+      "source_type": "alphavantage",
+      "published_at": "2026-01-31T12:32:35.296036",
+      "url": "https://www.tradingview.com/news/zacks:7e18a7842094b:0-nvidia-overtakes-apple-etfs-to-tap-the-incredible-growth-story/",
+      "category": "company",
+      "ticker": "AAPL",
+      "industry": null,
+      "sentiment_hint": 0.37767,
+      "keywords": [
+        "earnings",
+        "financial_markets",
+        "technology"
+      ],
+      "metadata": {
+        "sentiment_label": "Bullish",
+        "ticker_sentiments": {
+          "WUGI": {
+            "relevance": 0.928299,
+            "sentiment": 0.34363,
+            "label": "Somewhat-Bullish"
+          },
+          "NVDA": {
+            "relevance": 1.0,
+            "sentiment": 0.646231,
+            "label": "Bullish"
+          },
+          "AAPL": {
+            "relevance": 0.701147,
+            "sentiment": 0.226678,
+            "label": "Somewhat-Bullish"
+          }
+        }
+      }
+    },
+    {
+      "title": "BANK OF NOVA SCOTIA Acquires Significant Stake in TeraWulf Inc",
+      "content": "BANK OF NOVA SCOTIA has acquired over 27 million shares of TeraWulf Inc. at $11.49 per share, marking a new holding that constitutes 0.56% of its portfolio. TeraWulf Inc., a digital asset technology company focused on sustainable bitcoin mining, is currently considered significantly overvalued despite recent stock gains since the acquisition. This strategic investment reflects BANK OF NOVA SCOTIA's interest in expanding into the digital asset sector, balancing potential risks with opportunities in this evolving market.",
+      "source": "GuruFocus",
+      "source_type": "alphavantage",
+      "published_at": "2026-01-31T12:32:35.296009",
+      "url": "https://www.gurufocus.com/news/8569284/bank-of-nova-scotia-acquires-significant-stake-in-terawulf-inc",
+      "category": "company",
+      "ticker": "AAPL",
+      "industry": null,
+      "sentiment_hint": 0.204256,
+      "keywords": [
+        "mergers_and_acquisitions",
+        "finance",
+        "blockchain",
+        "financial_markets"
+      ],
+      "metadata": {
+        "sentiment_label": "Somewhat-Bullish",
+        "ticker_sentiments": {
+          "BNS": {
+            "relevance": 1.0,
+            "sentiment": 0.40401,
+            "label": "Bullish"
+          },
+          "AAPL": {
+            "relevance": 0.621784,
+            "sentiment": 0.141632,
+            "label": "Neutral"
+          },
+          "MSFT": {
+            "relevance": 0.646105,
+            "sentiment": 0.132952,
+            "label": "Neutral"
+          },
+          "NVDA": {
+            "relevance": 0.639173,
+            "sentiment": 0.119393,
+            "label": "Neutral"
+          }
+        }
+      }
+    },
+    {
+      "title": "How Investors Are Reacting To HP (HPQ) Dividend Payout As Greenlight Capital Exits Over AI PC Risks",
+      "content": "HP Inc. recently announced a US$0.30 per-share dividend, its second for fiscal 2026, amidst a challenging investment landscape. Greenlight Capital exited its HP position, citing rising memory costs and weak AI-driven PC demand as significant risks. This article explores how these factors, alongside differing fair value estimates among investors, shape HP's current investment narrative.",
+      "source": "Simply Wall Street",
+      "source_type": "alphavantage",
+      "published_at": "2026-01-31T12:32:35.295976",
+      "url": "https://simplywall.st/stocks/us/tech/nyse-hpq/hp/news/how-investors-are-reacting-to-hp-hpq-dividend-payout-as-gree",
+      "category": "company",
+      "ticker": "AAPL",
+      "industry": null,
+      "sentiment_hint": -0.07525,
+      "keywords": [
+        "earnings",
+        "financial_markets",
+        "technology",
+        "finance"
+      ],
+      "metadata": {
+        "sentiment_label": "Neutral",
+        "ticker_sentiments": {
+          "HPQ": {
+            "relevance": 0.953819,
+            "sentiment": -0.18457,
+            "label": "Somewhat-Bearish"
+          },
+          "AAPL": {
+            "relevance": 0.609803,
+            "sentiment": 0.09753,
+            "label": "Neutral"
+          }
+        }
+      }
+    },
+    {
+      "title": "Robert Bender&Associates Trims Apple Inc Stake Significantly",
+      "content": "Robert Bender&Associates, a hedge fund managed by Robert L. Bender, has significantly reduced its stake in Apple Inc (AAPL) by selling 5,824 shares. Despite recent volatility, Apple's stock maintains a \"Moderate Buy\" rating from Wall Street, with analysts projecting solid upside due to strong iPhone revenue, expanding product margins, and growth in services. TipRanks\u2019 AI Analyst, Spark, rates AAPL an \"Outperform\" based on strong financials and earnings outlook, though acknowledging mixed near-term technical momentum and a premium valuation.",
+      "source": "TipRanks",
+      "source_type": "alphavantage",
+      "published_at": "2026-01-31T12:32:35.295913",
+      "url": "https://www.tipranks.com/news/company-announcements/robert-benderassociates-trims-apple-inc-stake-significantly",
+      "category": "company",
+      "ticker": "AAPL",
+      "industry": null,
+      "sentiment_hint": 0.278529,
+      "keywords": [
+        "financial_markets",
+        "technology",
+        "earnings"
+      ],
+      "metadata": {
+        "sentiment_label": "Somewhat-Bullish",
+        "ticker_sentiments": {
+          "AAPL": {
+            "relevance": 1.0,
+            "sentiment": 0.258406,
+            "label": "Somewhat-Bullish"
+          }
+        }
+      }
+    },
+    {
+      "title": "Apple vs. Meta Platforms: Which \"Magnificent Seven\" Stock Is a Better Buy Right Now?",
+      "content": "Apple's revenue growth is accelerating again, while Meta's outlook is strong but clouded by heavy spending.",
+      "source": "Yahoo",
+      "source_type": "finnhub",
+      "published_at": "2026-01-31T10:56:00",
+      "url": "https://finnhub.io/api/news?id=9764b13402a1818e00c1748833db6053a6eba967630c400a603d77e01c7084e4",
+      "category": "company",
+      "ticker": "AAPL",
+      "industry": null,
+      "sentiment_hint": null,
+      "keywords": [
+        "AAPL"
+      ],
+      "metadata": {}
+    },
+    {
+      "title": "Dividend Champion, Contender, And Challenger Highlights: Week Of February 1",
+      "content": "",
+      "source": "SeekingAlpha",
+      "source_type": "finnhub",
+      "published_at": "2026-01-31T07:02:41",
+      "url": "https://finnhub.io/api/news?id=31f1258df7988e0a2d3066c8e69084a4eb78abdc098d6a56d50e2bdd1d58a925",
+      "category": "company",
+      "ticker": "AAPL",
+      "industry": null,
+      "sentiment_hint": null,
+      "keywords": [
+        "AAPL"
+      ],
+      "metadata": {}
+    },
+    {
+      "title": "Stock Market Today, Jan. 30: Apple Advances After Strong Earnings as Focus Turns to Supply and AI",
+      "content": "Apple\u2019s earnings confirmed resilient demand and record-breaking iPhone sales, while investor attention quickly shifts to supply constraints and the company\u2019s evolving AI strategy.",
+      "source": "Yahoo",
+      "source_type": "finnhub",
+      "published_at": "2026-01-31T06:51:38",
+      "url": "https://finnhub.io/api/news?id=1abb5cd929da65350b6edbb3273366ce649e1d1ce1f705050b835913b47da058",
+      "category": "company",
+      "ticker": "AAPL",
+      "industry": null,
+      "sentiment_hint": null,
+      "keywords": [
+        "AAPL"
+      ],
+      "metadata": {}
+    },
+    {
+      "title": "Stock Market Today, Jan. 30: Gold Plunges As Dollar Strengthens",
+      "content": "Gold\u2019s record plunge as precious metals and growth stocks pull back today, Jan. 30, 2026.",
+      "source": "Yahoo",
+      "source_type": "finnhub",
+      "published_at": "2026-01-31T06:45:34",
+      "url": "https://finnhub.io/api/news?id=390b29df283f4a59bd15d425f1be849b293c313d002879340c253e7b71b475bc",
+      "category": "company",
+      "ticker": "AAPL",
+      "industry": null,
+      "sentiment_hint": null,
+      "keywords": [
+        "AAPL"
+      ],
+      "metadata": {}
+    },
+    {
+      "title": "B. Riley Cuts Skyworks (SWKS) Target as Android Weakness Weighs on Outlook",
+      "content": "Skyworks Solutions, Inc. (NASDAQ:SWKS) is included among the 14 High Yield Dividend Stocks with Sustainable Payouts. On January 26, B. Riley analyst Craig Ellis cut his price objective on Skyworks Solutions, Inc. (NASDAQ:SWKS) to $60 from $70. The analyst kept a Neutral rating on the stock. In a research note, he said Q4 results should [\u2026]",
+      "source": "Yahoo",
+      "source_type": "finnhub",
+      "published_at": "2026-01-31T06:14:00",
+      "url": "https://finnhub.io/api/news?id=78293bb01b3af77de9bda7062cc8fef6bb150249cbeec56c81614a1e9f1fb3c3",
+      "category": "company",
+      "ticker": "AAPL",
+      "industry": null,
+      "sentiment_hint": null,
+      "keywords": [
+        "AAPL"
+      ],
+      "metadata": {}
+    },
+    {
+      "title": "Stocks to Watch Friday Recap: Apple, Sandisk, Verizon, Roblox",
+      "content": "\u2197\ufe0f Apple (AAPL): The company posted blowout iPhone sales and quarterly profit, but investors were concerned by rising costs, particularly for memory components. Shares recovered from early losses, finishing 0.",
+      "source": "Yahoo",
+      "source_type": "finnhub",
+      "published_at": "2026-01-31T06:13:25",
+      "url": "https://finnhub.io/api/news?id=4f1407e74c80e7ae4721fe1bd09f62a3b0f0148f37d7fd4c8810b49cf8fce657",
+      "category": "company",
+      "ticker": "AAPL",
+      "industry": null,
+      "sentiment_hint": null,
+      "keywords": [
+        "AAPL"
+      ],
+      "metadata": {}
+    },
+    {
+      "title": "Earnings live: Verizon, Sandisk stocks surge to cap a Big Tech-heavy earnings week",
+      "content": "More Big Tech earnings are ahead, with results from Amazon and Alphabet on deck.",
+      "source": "Yahoo",
+      "source_type": "finnhub",
+      "published_at": "2026-01-31T05:58:33",
+      "url": "https://finnhub.io/api/news?id=524b552b032c4f5b267d7214e1a51ddfc47fb3c3d4dfd3f2b64d054c837c25e7",
+      "category": "company",
+      "ticker": "AAPL",
+      "industry": null,
+      "sentiment_hint": null,
+      "keywords": [
+        "AAPL"
+      ],
+      "metadata": {}
+    }
+  ]
+}
