@@ -516,6 +516,115 @@ class RatioCalculator:
                 return float(data[key])
         return default
     
+    @staticmethod
+    def _convert_to_percentage(value: float, threshold: float = 1.0) -> float:
+        """
+        Convert decimal to percentage if needed.
+        Yahoo Finance returns some metrics as decimals (0.004 = 0.4%, 0.15 = 15%).
+        
+        Args:
+            value: The value to potentially convert
+            threshold: If 0 < abs(value) < threshold, assume it's decimal
+        
+        Returns:
+            Value converted to percentage (0-100 scale)
+        """
+        if value is None or value == 0:
+            return 0.0
+        # Check for NaN
+        if value != value:
+            return 0.0
+        # If value is between 0 and 1 (exclusive), assume it's decimal, multiply by 100
+        # This handles cases like 0.004 (0.4%), 0.15 (15%), 0.85 (85%)
+        if 0 < abs(value) < threshold:
+            return value * 100
+        # Otherwise assume it's already a percentage (values >= 1 are already percentages)
+        return value
+    
+    @staticmethod
+    def _calculate_interest_coverage(operating_income: float, interest_expense: float) -> float:
+        """
+        Calculate interest coverage ratio with proper handling of edge cases.
+        
+        Interest Coverage = Operating Income / Interest Expense
+        
+        Special cases:
+        - If no interest expense (debt-free company): Return 0 (can't calculate)
+        - If negative operating income: Return 0 (can't cover interest)
+        
+        Args:
+            operating_income: EBIT or Operating Income
+            interest_expense: Total interest expense
+        
+        Returns:
+            Interest coverage ratio or 0 if can't be calculated
+        """
+        # Handle None values
+        if operating_income is None:
+            operating_income = 0
+        if interest_expense is None:
+            interest_expense = 0
+            
+        # If no interest expense, can't calculate meaningful coverage
+        if interest_expense <= 0:
+            return 0
+        
+        # If negative operating income, can't cover interest
+        if operating_income < 0:
+            return 0
+        
+        return operating_income / interest_expense
+    
+    @staticmethod
+    def _calculate_dividend_sustainability(div_coverage: float, fcf_coverage: float, 
+                                          payout_ratio: float, dividend_yield: float) -> float:
+        """
+        Calculate normalized dividend sustainability score (0-100).
+        
+        Components:
+        - Dividend Coverage (40%): How many times earnings cover dividend
+        - FCF Coverage (30%): How many times FCF covers dividend
+        - Payout Ratio (20%): Is payout reasonable (<60% good)
+        - Has Dividend (10%): Simply has a dividend
+        
+        Args:
+            div_coverage: Dividend coverage ratio (NI / Dividends)
+            fcf_coverage: FCF coverage ratio (FCF / Dividends)
+            payout_ratio: Payout ratio as percentage (0-100)
+            dividend_yield: Dividend yield as percentage (0-100)
+        
+        Returns:
+            Score from 0-100
+        """
+        score = 0
+        
+        # Dividend Coverage Score: 2x coverage = 100%, 1x = 50%, 0x = 0%
+        if div_coverage is not None and div_coverage > 0:
+            # Max out at 100% with 2x coverage
+            div_cov_score = min(100, (div_coverage / 2.0) * 100)
+            score += div_cov_score * 0.4
+        
+        # FCF Coverage Score: 1.5x coverage = 100%, 0.75x = 50%
+        if fcf_coverage is not None and fcf_coverage > 0:
+            fcf_cov_score = min(100, (fcf_coverage / 1.5) * 100)
+            score += fcf_cov_score * 0.3
+        
+        # Payout Ratio Score: <60% = 100%, >80% = 0%
+        if payout_ratio is not None and payout_ratio > 0:
+            if payout_ratio < 60:
+                score += 100 * 0.2
+            elif payout_ratio < 80:
+                # Linear decline from 100 to 0 between 60-80%
+                ratio_score = 100 - ((payout_ratio - 60) / 20 * 100)
+                score += ratio_score * 0.2
+            # >80% payout is risky, adds 0
+        
+        # Has Dividend Score: If paying dividend = 100%, else = 0%
+        if dividend_yield is not None and dividend_yield > 0:
+            score += 100 * 0.1
+        
+        return min(100, max(0, score))
+    
     def calculate_valuation_ratios(self, info: Dict, income: Dict, balance: Dict, 
                                    market_cap: float, price: float) -> Dict[str, float]:
         """Calculate valuation ratios"""
@@ -531,7 +640,8 @@ class RatioCalculator:
         total_debt = self.get_value(balance, ['Total Debt', 'TotalDebt', 'Long Term Debt'])
         cash = self.get_value(balance, ['Cash And Cash Equivalents', 'Cash', 'Cash And Short Term Investments'])
         
-        shares_outstanding = info.get('shares_outstanding', 0) or 1
+        # FIX #6: Simplified shares_outstanding logic
+        shares_outstanding = info.get('shares_outstanding') or 1
         
         # Calculate EPS
         eps = self.safe_divide(net_income, shares_outstanding)
@@ -539,25 +649,39 @@ class RatioCalculator:
         # Calculate book value per share
         book_value_per_share = self.safe_divide(total_equity, shares_outstanding)
         
+        # FIX #9: Ensure values are numbers before Enterprise Value calculation
+        total_debt = total_debt or 0
+        cash = cash or 0
+        market_cap = market_cap or 0
+        
         # Enterprise Value
         enterprise_value = market_cap + total_debt - cash
         
+        # === PEG RATIO ===
+        # FIX #1: Use Yahoo's PEG ratio value only, don't try to calculate with undefined variable
+        # If Yahoo doesn't provide it, default to 0
+        peg = info.get('peg_ratio') or 0
+        
+        # Get operating and free cash flow with proper None handling (FIX #8)
+        operating_cash_flow = info.get('operating_cash_flow') or 0
+        free_cash_flow = info.get('free_cash_flow') or 0
+        
         return {
-            'price': price,
+            'price': price or 0,
             'market_cap': market_cap,
             'enterprise_value': enterprise_value,
-            'pe_ratio': self.safe_divide(price, eps) if eps > 0 else info.get('trailing_pe', 0),
-            'forward_pe': info.get('forward_pe', 0),
-            'peg_ratio': info.get('peg_ratio', 0),
-            'price_to_book': self.safe_divide(price, book_value_per_share) if book_value_per_share > 0 else info.get('price_to_book', 0),
-            'price_to_sales': self.safe_divide(market_cap, revenue) if revenue > 0 else info.get('price_to_sales', 0),
-            'price_to_cash_flow': self.safe_divide(market_cap, info.get('operating_cash_flow', 0)),
-            'price_to_free_cash_flow': self.safe_divide(market_cap, info.get('free_cash_flow', 0)),
-            'ev_to_ebitda': self.safe_divide(enterprise_value, ebitda) if ebitda > 0 else info.get('ev_to_ebitda', 0),
-            'ev_to_revenue': self.safe_divide(enterprise_value, revenue) if revenue > 0 else info.get('ev_to_revenue', 0),
-            'ev_to_fcf': self.safe_divide(enterprise_value, info.get('free_cash_flow', 0)),
-            'earnings_yield': self.safe_divide(eps, price) * 100,  # Inverse of P/E as percentage
-            'fcf_yield': self.safe_divide(info.get('free_cash_flow', 0), market_cap) * 100,
+            'pe_ratio': self.safe_divide(price, eps) if eps > 0 else (info.get('trailing_pe') or 0),
+            'forward_pe': info.get('forward_pe') or 0,
+            'peg_ratio': peg,
+            'price_to_book': self.safe_divide(price, book_value_per_share) if book_value_per_share > 0 else (info.get('price_to_book') or 0),
+            'price_to_sales': self.safe_divide(market_cap, revenue) if revenue > 0 else (info.get('price_to_sales') or 0),
+            'price_to_cash_flow': self.safe_divide(market_cap, operating_cash_flow) if operating_cash_flow > 0 else 0,
+            'price_to_free_cash_flow': self.safe_divide(market_cap, free_cash_flow) if free_cash_flow > 0 else 0,
+            'ev_to_ebitda': self.safe_divide(enterprise_value, ebitda) if ebitda > 0 else (info.get('ev_to_ebitda') or 0),
+            'ev_to_revenue': self.safe_divide(enterprise_value, revenue) if revenue > 0 else (info.get('ev_to_revenue') or 0),
+            'ev_to_fcf': self.safe_divide(enterprise_value, free_cash_flow) if free_cash_flow > 0 else 0,
+            'earnings_yield': self.safe_divide(eps, price) * 100 if price > 0 else 0,
+            'fcf_yield': self.safe_divide(free_cash_flow, market_cap) * 100 if market_cap > 0 else 0,
             'book_value_per_share': book_value_per_share,
             'eps': eps,
         }
@@ -591,21 +715,21 @@ class RatioCalculator:
             prev_equity = self.get_value(prev_balance, ['Total Stockholder Equity', 'Stockholders Equity',
                                                          'Total Equity Gross Minority Interest'])
             prev_assets = self.get_value(prev_balance, ['Total Assets', 'TotalAssets'])
-            avg_equity = (total_equity + prev_equity) / 2
-            avg_assets = (total_assets + prev_assets) / 2
+            avg_equity = (total_equity + prev_equity) / 2 if prev_equity > 0 else total_equity
+            avg_assets = (total_assets + prev_assets) / 2 if prev_assets > 0 else total_assets
         else:
             avg_equity = total_equity
             avg_assets = total_assets
         
         return {
-            'gross_margin': self.safe_divide(gross_profit, revenue) * 100,
-            'operating_margin': self.safe_divide(operating_income, revenue) * 100,
-            'net_profit_margin': self.safe_divide(net_income, revenue) * 100,
-            'ebitda_margin': self.safe_divide(ebitda, revenue) * 100,
-            'return_on_equity': self.safe_divide(net_income, avg_equity) * 100,
-            'return_on_assets': self.safe_divide(net_income, avg_assets) * 100,
-            'return_on_invested_capital': self.safe_divide(nopat, invested_capital) * 100,
-            'return_on_capital_employed': self.safe_divide(operating_income, (total_assets - self.get_value(balance, ['Total Current Liabilities', 'Current Liabilities']))) * 100,
+            'gross_margin': self.safe_divide(gross_profit, revenue) * 100 if revenue > 0 else 0,
+            'operating_margin': self.safe_divide(operating_income, revenue) * 100 if revenue > 0 else 0,
+            'net_profit_margin': self.safe_divide(net_income, revenue) * 100 if revenue > 0 else 0,
+            'ebitda_margin': self.safe_divide(ebitda, revenue) * 100 if revenue > 0 else 0,
+            'return_on_equity': self.safe_divide(net_income, avg_equity) * 100 if avg_equity > 0 else 0,
+            'return_on_assets': self.safe_divide(net_income, avg_assets) * 100 if avg_assets > 0 else 0,
+            'return_on_invested_capital': self.safe_divide(nopat, invested_capital) * 100 if invested_capital > 0 else 0,
+            'return_on_capital_employed': self.safe_divide(operating_income, (total_assets - self.get_value(balance, ['Total Current Liabilities', 'Current Liabilities']))) * 100 if total_assets > 0 else 0,
             'gross_profit': gross_profit,
             'operating_income': operating_income,
             'net_income': net_income,
@@ -623,11 +747,11 @@ class RatioCalculator:
         receivables = self.get_value(balance, ['Net Receivables', 'Accounts Receivable', 'Receivables'])
         
         return {
-            'current_ratio': self.safe_divide(current_assets, current_liabilities),
-            'quick_ratio': self.safe_divide(current_assets - inventory, current_liabilities),
-            'cash_ratio': self.safe_divide(cash, current_liabilities),
+            'current_ratio': self.safe_divide(current_assets, current_liabilities) if current_liabilities > 0 else 0,
+            'quick_ratio': self.safe_divide(current_assets - inventory, current_liabilities) if current_liabilities > 0 else 0,
+            'cash_ratio': self.safe_divide(cash, current_liabilities) if current_liabilities > 0 else 0,
             'working_capital': current_assets - current_liabilities,
-            'working_capital_ratio': self.safe_divide(current_assets - current_liabilities, current_assets) * 100,
+            'working_capital_ratio': self.safe_divide(current_assets - current_liabilities, current_assets) * 100 if current_assets > 0 else 0,
             'defensive_interval': self.safe_divide(current_assets, self.get_value(balance, ['Operating Expenses', 'Total Operating Expenses'], 1) / 365),
             'cash': cash,
             'current_assets': current_assets,
@@ -651,15 +775,19 @@ class RatioCalculator:
         interest_expense = self.get_value(income, ['Interest Expense', 'InterestExpense'])
         ebitda = self.get_value(income, ['EBITDA', 'Ebitda'])
         
+        # FIX #3 & #5: Use helper function for interest coverage calculations
+        interest_coverage = self._calculate_interest_coverage(operating_income, interest_expense)
+        debt_service_coverage = self._calculate_interest_coverage(ebitda, interest_expense + short_term_debt)
+        
         return {
-            'debt_to_equity': self.safe_divide(total_debt, total_equity),
-            'debt_to_assets': self.safe_divide(total_debt, total_assets),
-            'debt_to_capital': self.safe_divide(total_debt, total_debt + total_equity),
-            'long_term_debt_to_equity': self.safe_divide(long_term_debt, total_equity),
-            'equity_multiplier': self.safe_divide(total_assets, total_equity),
-            'financial_leverage': self.safe_divide(total_assets, total_equity),
-            'interest_coverage': self.safe_divide(operating_income, interest_expense) if interest_expense > 0 else 999,
-            'debt_service_coverage': self.safe_divide(ebitda, interest_expense + short_term_debt) if (interest_expense + short_term_debt) > 0 else 999,
+            'debt_to_equity': self.safe_divide(total_debt, total_equity) if total_equity > 0 else 0,
+            'debt_to_assets': self.safe_divide(total_debt, total_assets) if total_assets > 0 else 0,
+            'debt_to_capital': self.safe_divide(total_debt, total_debt + total_equity) if (total_debt + total_equity) > 0 else 0,
+            'long_term_debt_to_equity': self.safe_divide(long_term_debt, total_equity) if total_equity > 0 else 0,
+            'equity_multiplier': self.safe_divide(total_assets, total_equity) if total_equity > 0 else 0,
+            'financial_leverage': self.safe_divide(total_assets, total_equity) if total_equity > 0 else 0,
+            'interest_coverage': interest_coverage,
+            'debt_service_coverage': debt_service_coverage,
             'total_debt': total_debt,
             'long_term_debt': long_term_debt,
             'short_term_debt': short_term_debt,
@@ -693,13 +821,13 @@ class RatioCalculator:
             avg_payables = payables
             avg_assets = total_assets
         
-        # Turnover ratios
-        inventory_turnover = self.safe_divide(cogs, avg_inventory)
-        receivables_turnover = self.safe_divide(revenue, avg_receivables)
-        payables_turnover = self.safe_divide(cogs, avg_payables)
-        asset_turnover = self.safe_divide(revenue, avg_assets)
+        # Turnover ratios - only calculate if denominator is positive
+        inventory_turnover = self.safe_divide(cogs, avg_inventory) if avg_inventory > 0 else 0
+        receivables_turnover = self.safe_divide(revenue, avg_receivables) if avg_receivables > 0 else 0
+        payables_turnover = self.safe_divide(cogs, avg_payables) if avg_payables > 0 else 0
+        asset_turnover = self.safe_divide(revenue, avg_assets) if avg_assets > 0 else 0
         
-        # Days ratios
+        # Days ratios - only calculate if turnover is positive
         days_inventory = self.safe_divide(365, inventory_turnover) if inventory_turnover > 0 else 0
         days_receivables = self.safe_divide(365, receivables_turnover) if receivables_turnover > 0 else 0
         days_payables = self.safe_divide(365, payables_turnover) if payables_turnover > 0 else 0
@@ -712,7 +840,7 @@ class RatioCalculator:
             'inventory_turnover': inventory_turnover,
             'receivables_turnover': receivables_turnover,
             'payables_turnover': payables_turnover,
-            'fixed_asset_turnover': self.safe_divide(revenue, fixed_assets),
+            'fixed_asset_turnover': self.safe_divide(revenue, fixed_assets) if fixed_assets > 0 else 0,
             'days_inventory_outstanding': days_inventory,
             'days_sales_outstanding': days_receivables,
             'days_payables_outstanding': days_payables,
@@ -733,6 +861,8 @@ class RatioCalculator:
                 'ebitda_growth_yoy': 0,
                 'book_value_growth_yoy': 0,
                 'eps_growth_yoy': 0,
+                'gross_profit_growth_yoy': 0,
+                'operating_income_growth_yoy': 0,
             }
         
         def cagr(start_value: float, end_value: float, years: int) -> float:
@@ -796,30 +926,40 @@ class RatioCalculator:
     def calculate_dividend_metrics(self, info: Dict, income: Dict, cash_flow: Dict) -> Dict[str, Any]:
         """Calculate dividend-related metrics"""
         
-        dividend_yield = info.get('dividend_yield', 0) or 0
-        dividend_rate = info.get('dividend_rate', 0) or 0
-        payout_ratio = info.get('payout_ratio', 0) or 0
+        # Get raw values from Yahoo (these are often decimals: 0.004 = 0.4%)
+        dividend_yield = info.get('dividend_yield') or 0
+        dividend_rate = info.get('dividend_rate') or 0
+        payout_ratio = info.get('payout_ratio') or 0
+        five_year_avg_yield = info.get('five_year_avg_dividend_yield') or 0
         
         net_income = self.get_value(income, ['Net Income', 'NetIncome', 'Net Income Common Stockholders'])
         free_cash_flow = self.get_value(cash_flow, ['Free Cash Flow', 'FreeCashFlow'])
         dividends_paid = abs(self.get_value(cash_flow, ['Cash Dividends Paid', 'Dividends Paid', 'Common Stock Dividend Paid']))
         
-        # Calculate additional dividend metrics
+        # Calculate coverage ratios
         dividend_coverage = self.safe_divide(net_income, dividends_paid) if dividends_paid > 0 else 0
         fcf_dividend_coverage = self.safe_divide(free_cash_flow, dividends_paid) if dividends_paid > 0 else 0
         
+        # FIX #2: Convert decimal percentages from Yahoo to 0-100 scale using helper
+        dividend_yield_pct = self._convert_to_percentage(dividend_yield)
+        payout_ratio_pct = self._convert_to_percentage(payout_ratio)
+        five_year_yield_pct = self._convert_to_percentage(five_year_avg_yield)
+        
+        # FIX #7: Calculate normalized dividend sustainability score
+        sustainability_score = self._calculate_dividend_sustainability(
+            dividend_coverage, fcf_dividend_coverage, payout_ratio_pct, dividend_yield_pct
+        )
+        
         return {
-            'dividend_yield': dividend_yield * 100 if dividend_yield < 1 else dividend_yield,  # Convert to percentage
+            'dividend_yield': dividend_yield_pct,
             'dividend_rate': dividend_rate,
-            'payout_ratio': payout_ratio * 100 if payout_ratio < 1 else payout_ratio,
+            'payout_ratio': payout_ratio_pct,
             'dividend_coverage': dividend_coverage,
             'fcf_dividend_coverage': fcf_dividend_coverage,
             'dividends_paid': dividends_paid,
-            'five_year_avg_yield': info.get('five_year_avg_dividend_yield', 0) or 0,
+            'five_year_avg_yield': five_year_yield_pct,
             'is_dividend_payer': dividends_paid > 0 or dividend_rate > 0,
-            'dividend_sustainability_score': min(100, (dividend_coverage * 20 + fcf_dividend_coverage * 20 + 
-                                                        (1 if payout_ratio < 0.6 else 0) * 30 + 
-                                                        (1 if dividend_yield > 0 else 0) * 30)),
+            'dividend_sustainability_score': sustainability_score,
         }
     
     def calculate_quality_scores(self, income: Dict, balance: Dict, cash_flow: Dict,
@@ -887,7 +1027,7 @@ class RatioCalculator:
         f_score = 0
         
         # Profitability signals
-        roa = self.safe_divide(net_income, total_assets)
+        roa = self.safe_divide(net_income, total_assets) if total_assets > 0 else 0
         if roa > 0:
             f_score += 1
         if operating_cash_flow > 0:
@@ -896,17 +1036,17 @@ class RatioCalculator:
             f_score += 1
         
         # Leverage signals
-        current_ratio = self.safe_divide(current_assets, current_liabilities)
+        current_ratio = self.safe_divide(current_assets, current_liabilities) if current_liabilities > 0 else 0
         if current_ratio > 1:
             f_score += 1
         
         # For full F-Score, would need historical data comparison
         # Adding partial scores based on current data
-        gross_margin = self.safe_divide(self.get_value(income, ['Gross Profit', 'GrossProfit']), revenue)
+        gross_margin = self.safe_divide(self.get_value(income, ['Gross Profit', 'GrossProfit']), revenue) if revenue > 0 else 0
         if gross_margin > 0.3:  # Above 30% gross margin
             f_score += 1
         
-        asset_turnover = self.safe_divide(revenue, total_assets)
+        asset_turnover = self.safe_divide(revenue, total_assets) if total_assets > 0 else 0
         if asset_turnover > 0.5:
             f_score += 1
         
@@ -916,14 +1056,15 @@ class RatioCalculator:
             prev_roa = self.safe_divide(
                 self.get_value(prev_income, ['Net Income', 'NetIncome']),
                 total_assets
-            )
+            ) if total_assets > 0 else 0
             if roa > prev_roa:
                 f_score += 1
             
+            prev_revenue = self.get_value(prev_income, ['Total Revenue', 'TotalRevenue', 'Revenue'])
             prev_gross_margin = self.safe_divide(
                 self.get_value(prev_income, ['Gross Profit', 'GrossProfit']),
-                self.get_value(prev_income, ['Total Revenue', 'TotalRevenue', 'Revenue'])
-            )
+                prev_revenue
+            ) if prev_revenue > 0 else 0
             if gross_margin > prev_gross_margin:
                 f_score += 1
         
@@ -940,13 +1081,12 @@ class RatioCalculator:
         
         # === DuPont Analysis ===
         # ROE = Net Profit Margin × Asset Turnover × Equity Multiplier
-        net_margin = self.safe_divide(net_income, revenue)
-        equity_multiplier = self.safe_divide(total_assets, total_equity)
+        net_margin = self.safe_divide(net_income, revenue) if revenue > 0 else 0
+        equity_multiplier = self.safe_divide(total_assets, total_equity) if total_equity > 0 else 0
         dupont_roe = net_margin * asset_turnover * equity_multiplier * 100
         
-        # === Beneish M-Score (Earnings Manipulation Detection) ===
-        # Simplified version - would need more historical data for full calculation
-        # M > -1.78 suggests possible manipulation
+        # Quality of earnings
+        quality_of_earnings = self.safe_divide(operating_cash_flow, net_income) if net_income != 0 else 0
         
         return {
             'altman_z_score': round(altman_z, 2),
@@ -957,8 +1097,8 @@ class RatioCalculator:
             'dupont_net_margin': round(net_margin * 100, 2),
             'dupont_asset_turnover': round(asset_turnover, 2),
             'dupont_equity_multiplier': round(equity_multiplier, 2),
-            'accruals_ratio': round(self.safe_divide(net_income - operating_cash_flow, total_assets) * 100, 2),
-            'quality_of_earnings': round(self.safe_divide(operating_cash_flow, net_income), 2) if net_income != 0 else 0,
+            'accruals_ratio': round(self.safe_divide(net_income - operating_cash_flow, total_assets) * 100, 2) if total_assets > 0 else 0,
+            'quality_of_earnings': round(quality_of_earnings, 2),
         }
 
 
@@ -1071,11 +1211,11 @@ class FundamentalCalculator:
         hist = self.yahoo.get_historical_data(ticker)
         
         # Current vs historical averages
-        current_price = stats.get('current_price', 0)
-        fifty_day_avg = stats.get('fifty_day_average', 0)
-        two_hundred_day_avg = stats.get('two_hundred_day_average', 0)
-        fifty_two_week_high = stats.get('fifty_two_week_high', 0)
-        fifty_two_week_low = stats.get('fifty_two_week_low', 0)
+        current_price = stats.get('current_price') or 0
+        fifty_day_avg = stats.get('fifty_day_average') or 0
+        two_hundred_day_avg = stats.get('two_hundred_day_average') or 0
+        fifty_two_week_high = stats.get('fifty_two_week_high') or 0
+        fifty_two_week_low = stats.get('fifty_two_week_low') or 0
         
         return {
             'current_price': current_price,
@@ -1136,9 +1276,9 @@ class FundamentalCalculator:
         prev_balance = balance_annual[1].get('data', {}) if len(balance_annual) > 1 else {}
         current_cash_flow = cash_flow_annual[0].get('data', {}) if cash_flow_annual else {}
         
-        # Get market data
-        market_cap = company_info.get('market_cap', 0) or key_stats.get('market_cap', 0) or 0
-        current_price = key_stats.get('current_price', 0) or 0
+        # FIX #5 & #7: Get market data with proper fallback logic
+        market_cap = company_info.get('market_cap') or key_stats.get('market_cap') or 0
+        current_price = key_stats.get('current_price') or 0
         
         # Calculate all ratios
         valuation = self.ratio_calc.calculate_valuation_ratios(
@@ -1234,6 +1374,7 @@ Employees: {info.get('employees', 0):,}
         
         # Valuation Metrics
         val = data.get('valuation_ratios', {})
+        peg_display = f"{val.get('peg_ratio', 0):.2f}" if val.get('peg_ratio', 0) > 0 else "N/A"
         sections.append(f"""
 === VALUATION METRICS ===
 Current Price: ${val.get('price', 0):.2f}
@@ -1241,7 +1382,7 @@ Market Cap: ${val.get('market_cap', 0):,.0f}
 Enterprise Value: ${val.get('enterprise_value', 0):,.0f}
 P/E Ratio (TTM): {val.get('pe_ratio', 0):.2f}
 Forward P/E: {val.get('forward_pe', 0):.2f}
-PEG Ratio: {val.get('peg_ratio', 0):.2f}
+PEG Ratio: {peg_display}
 Price/Book: {val.get('price_to_book', 0):.2f}
 Price/Sales: {val.get('price_to_sales', 0):.2f}
 EV/EBITDA: {val.get('ev_to_ebitda', 0):.2f}
@@ -1281,11 +1422,13 @@ Cash & Equivalents: ${liq.get('cash', 0):,.0f}
         
         # Leverage Metrics
         lev = data.get('leverage_ratios', {})
+        # Display interest coverage - show 0 if not calculable instead of misleading high values
+        interest_cov_display = f"{lev.get('interest_coverage', 0):.2f}x" if lev.get('interest_coverage', 0) > 0 else "N/A (no interest expense or negative income)"
         sections.append(f"""
 === LEVERAGE/SOLVENCY METRICS ===
 Debt/Equity: {lev.get('debt_to_equity', 0):.2f}
 Debt/Assets: {lev.get('debt_to_assets', 0):.2f}
-Interest Coverage: {lev.get('interest_coverage', 0):.2f}x
+Interest Coverage: {interest_cov_display}
 Equity Multiplier: {lev.get('equity_multiplier', 0):.2f}
 Total Debt: ${lev.get('total_debt', 0):,.0f}
 Total Equity: ${lev.get('total_equity', 0):,.0f}

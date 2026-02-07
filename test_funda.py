@@ -8,6 +8,7 @@ This tests:
 """
 
 import os
+import time
 from dotenv import load_dotenv
 load_dotenv()
 
@@ -27,6 +28,8 @@ print(f"Name: {info.get('name')}")
 print(f"Sector: {info.get('sector')}")
 print(f"Industry: {info.get('industry')}")
 print(f"Market Cap: ${info.get('market_cap', 0):,.0f}")
+
+time.sleep(10)
 
 # Test full fundamentals
 print("\n--- Fetching Full Fundamentals (this may take a moment) ---")
