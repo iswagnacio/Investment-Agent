@@ -1,6 +1,8 @@
 """
-Fundamental Analyst Agent Module
+Fundamental Analyst Agent Module - FIXED VERSION
 =================================
+FIXED: Strong ticker anchoring throughout all prompts to prevent LLM hallucination
+
 Uses LLM to intelligently analyze fundamental data based on company
 characteristics (sector, industry, size, business model).
 
@@ -37,6 +39,8 @@ class FundamentalAnalystAgent:
     """
     Uses LLM to intelligently analyze fundamental data.
     Selects relevant metrics based on company characteristics.
+    
+    FIXED: All prompts now strongly anchor to the ticker being analyzed.
     """
     
     def __init__(self, model: str = "claude-sonnet-4-5"):
@@ -44,7 +48,7 @@ class FundamentalAnalystAgent:
             raise ValueError("ANTHROPIC_API_KEY environment variable not set")
         
         self.calculator = FundamentalCalculator()
-        self.llm = ChatAnthropic(model_name=model, temperature=0, max_tokens = 4096)
+        self.llm = ChatAnthropic(model_name=model, temperature=0, max_tokens=4096)
     
     def analyze(self, ticker: str, analysis_type: str = "comprehensive") -> str:
         """
@@ -58,6 +62,7 @@ class FundamentalAnalystAgent:
                 - "quality": Focus on financial quality
                 - "dividend": Focus on dividend sustainability
                 - "growth": Focus on growth metrics
+                - "for_synthesis": Structured output for lead agent
         
         Returns:
             Detailed fundamental analysis report
@@ -79,13 +84,15 @@ class FundamentalAnalystAgent:
             prompt = self._create_dividend_prompt()
         elif analysis_type == "growth":
             prompt = self._create_growth_prompt()
+        elif analysis_type == "for_synthesis":
+            prompt = self._create_synthesis_prompt()
         else:
             prompt = self._create_comprehensive_prompt()
         
         # Get company info for context
         company_info = data.get('company_info', {})
         
-        # Invoke LLM
+        # Invoke LLM with STRONG ticker verification
         response = self.llm.invoke(prompt.format(
             ticker=ticker,
             company_name=company_info.get('name', ticker),
@@ -108,37 +115,52 @@ class FundamentalAnalystAgent:
         
         # Handle response content
         if isinstance(response.content, str):
-            return response.content
+            analysis = response.content
         elif isinstance(response.content, list):
             text_parts = [item for item in response.content if isinstance(item, str)]
-            return '\n'.join(text_parts) if text_parts else str(response.content)
+            analysis = '\n'.join(text_parts) if text_parts else str(response.content)
         else:
-            return str(response.content)
+            analysis = str(response.content)
+        
+        # CRITICAL: Verify the analysis is actually for the requested ticker
+        ticker_count = analysis.upper().count(ticker.upper())
+        company_name = company_info.get('name', '')
+        
+        if ticker_count < 3:
+            print(f"⚠️  WARNING: Analysis for {ticker} only mentions ticker {ticker_count} times!")
+            print(f"   First 200 chars: {analysis[:200]}")
+        
+        # Add header to ensure ticker is clear
+        header = f"=== FUNDAMENTAL ANALYSIS FOR {ticker} ({company_name}) ===\n\n"
+        
+        return header + analysis
     
     def _create_comprehensive_prompt(self) -> PromptTemplate:
-        """Create prompt for comprehensive fundamental analysis"""
+        """Create prompt for comprehensive fundamental analysis with STRONG ticker anchoring"""
         
-        template = """You are a fundamental analysis expert providing institutional-quality investment research. 
-Analyze the following stock using a systematic approach tailored to its specific characteristics.
+        template = """You are a fundamental analysis expert providing institutional-quality investment research.
+
+**CRITICAL: You are analyzing {ticker} ({company_name}). You must ONLY analyze THIS stock. Do NOT confuse it with any other company.**
 
 === COMPANY INFORMATION ===
-Ticker: {ticker}
-Company: {company_name}
+**ANALYZING: {ticker} - {company_name}**
 Sector: {sector}
 Industry: {industry}
 Market Cap: ${market_cap:,}
 
-=== FUNDAMENTAL DATA ===
+=== FUNDAMENTAL DATA FOR {ticker} ===
 {fundamental_data}
 
 === RAW METRICS (for reference) ===
 {raw_data}
 
-=== YOUR ANALYSIS FRAMEWORK ===
+=== YOUR ANALYSIS FRAMEWORK FOR {ticker} ===
 
-Based on the company's sector, industry, and size, select and weight the MOST RELEVANT metrics:
+**REMINDER: You are analyzing {ticker} ({company_name}). Every statement must be about THIS company.**
 
-1. **SECTOR-SPECIFIC CONSIDERATIONS**:
+Based on {ticker}'s sector ({sector}), industry ({industry}), and size, select and weight the MOST RELEVANT metrics:
+
+1. **SECTOR-SPECIFIC CONSIDERATIONS FOR {ticker}**:
    - Technology: Focus on growth rates, R&D spending, scalability metrics, recurring revenue
    - Financials: Focus on ROE, net interest margin, loan quality, capital ratios
    - Healthcare: Focus on pipeline value, patent cliffs, R&D productivity, regulatory risks
@@ -148,77 +170,139 @@ Based on the company's sector, industry, and size, select and weight the MOST RE
    - Energy: Focus on reserve life, production costs, commodity exposure, capital discipline
    - Real Estate: Focus on FFO, occupancy rates, cap rates, debt maturities
 
-2. **SIZE-SPECIFIC CONSIDERATIONS**:
+2. **SIZE-SPECIFIC CONSIDERATIONS FOR {ticker}**:
    - Large-cap (>$200B): Emphasize stability, dividend sustainability, market position
    - Mid-cap ($10B-$200B): Balance growth potential with financial stability
    - Small-cap (<$10B): Focus on growth trajectory, liquidity, management quality
 
-3. **BUSINESS MODEL CONSIDERATIONS**:
+3. **BUSINESS MODEL CONSIDERATIONS FOR {ticker}**:
    - Capital-intensive: Focus on ROIC, asset turnover, depreciation policies
    - Asset-light: Focus on margins, scalability, customer acquisition costs
    - Subscription/recurring: Focus on retention rates, LTV/CAC, expansion revenue
    - Cyclical: Focus on leverage, cash reserves, cycle positioning
 
-=== REQUIRED ANALYSIS SECTIONS ===
+=== REQUIRED ANALYSIS SECTIONS FOR {ticker} ===
 
-**1. EXECUTIVE SUMMARY** (2-3 sentences)
+**START YOUR ANALYSIS WITH: "{ticker} ({company_name})..."**
+
+**1. EXECUTIVE SUMMARY FOR {ticker}** (2-3 sentences)
+- Begin: "{ticker} presents..."
 - Key investment thesis in plain language
 
-**2. VALUATION ASSESSMENT**
-- Is the stock fairly valued based on:
-  * Historical multiples comparison
+**2. VALUATION ASSESSMENT OF {ticker}**
+- Is {ticker} fairly valued based on:
+  * Historical multiples comparison for {ticker}
   * Peer group comparison
   * Growth-adjusted metrics (PEG, EV/EBITDA vs growth)
-- Provide specific numbers and context
+- Provide specific numbers and context for {ticker}
 
-**3. FINANCIAL QUALITY ANALYSIS**
-- Earnings quality (cash flow vs. accruals)
-- Balance sheet strength (Altman Z-Score interpretation)
-- Operational efficiency (Piotroski F-Score interpretation)
-- DuPont ROE decomposition insights
+**3. FINANCIAL QUALITY ANALYSIS OF {ticker}**
+- Earnings quality (cash flow vs. accruals) for {ticker}
+- Balance sheet strength (Altman Z-Score interpretation) for {ticker}
+- Operational efficiency (Piotroski F-Score interpretation) for {ticker}
+- DuPont ROE decomposition insights for {ticker}
 
-**4. GROWTH SUSTAINABILITY**
-- Revenue growth trajectory and drivers
-- Margin expansion/compression trends
-- Reinvestment rate and returns on reinvested capital
+**4. GROWTH SUSTAINABILITY OF {ticker}**
+- Revenue growth trajectory and drivers for {ticker}
+- Margin expansion/compression trends for {ticker}
+- Reinvestment rate and returns on reinvested capital for {ticker}
 
-**5. FINANCIAL HEALTH CHECK**
-- Liquidity adequacy for the business model
-- Leverage appropriateness for the industry
-- Interest coverage and debt serviceability
+**5. FINANCIAL HEALTH CHECK OF {ticker}**
+- Liquidity adequacy for {ticker}'s business model
+- Leverage appropriateness for {ticker}'s industry
+- Interest coverage and debt serviceability for {ticker}
 
-**6. DIVIDEND ANALYSIS** (if applicable)
-- Payout sustainability
-- Coverage from earnings vs. free cash flow
-- Growth potential or risks
+**6. DIVIDEND ANALYSIS OF {ticker}** (if applicable)
+- Payout sustainability for {ticker}
+- Coverage from earnings vs. free cash flow for {ticker}
+- Growth potential or risks for {ticker}
 
-**7. PEER POSITIONING**
-- How does this company compare to industry peers?
-- Competitive advantages or disadvantages
+**7. PEER POSITIONING OF {ticker}**
+- How does {ticker} compare to industry peers?
+- {ticker}'s competitive advantages or disadvantages
 
-**8. KEY RISKS**
-- 2-3 specific risks based on the fundamental data
+**8. KEY RISKS FOR {ticker}**
+- 2-3 specific risks based on {ticker}'s fundamental data
 
-**9. CONCLUSION**
-- Synthesize the analysis into actionable insights
-- Note any areas requiring further investigation
+**9. CONCLUSION FOR {ticker}**
+- Synthesize the analysis into actionable insights about {ticker}
+- Note any areas requiring further investigation for {ticker}
 
 === IMPORTANT GUIDELINES ===
-- Be specific with numbers - cite actual figures from the data
-- Explain what the numbers mean in context of this specific company
-- Avoid generic statements - make every observation company-specific
-- DO NOT provide buy/sell recommendations - focus on objective analysis
-- Highlight both strengths and weaknesses
+- Be specific with numbers - cite actual figures from {ticker}'s data
+- Explain what the numbers mean in context of {ticker} specifically
+- Avoid generic statements - make every observation specific to {ticker}
+- DO NOT provide buy/sell recommendations - focus on objective analysis of {ticker}
+- Highlight both {ticker}'s strengths and weaknesses
 - Keep the analysis to approximately 600-800 words
+- **CRITICAL: Your entire response must be about {ticker} ({company_name}). Do NOT analyze any other stock.**
 
-Begin your analysis:"""
+Begin your analysis of {ticker}:"""
+
+        return PromptTemplate.from_template(template)
+    
+    def _create_synthesis_prompt(self) -> PromptTemplate:
+        """Create prompt for structured output (for lead agent integration)"""
+        
+        template = """You are a fundamental analyst providing STRUCTURED analysis for algorithmic integration.
+
+**ANALYZING: {ticker} ({company_name})**
+
+=== DATA FOR {ticker} ===
+{fundamental_data}
+
+=== YOUR TASK ===
+
+Analyze {ticker} and provide a STRUCTURED JSON response (not prose).
+
+Return ONLY valid JSON in this exact format:
+
+{{
+  "ticker": "{ticker}",
+  "company_name": "{company_name}",
+  "llm_analysis": {{
+    "valuation_verdict": {{
+      "signal": "Undervalued|Fairly Valued|Overvalued|Extremely Overvalued",
+      "confidence": "High|Medium|Low",
+      "reasoning": "One sentence explaining {ticker}'s valuation"
+    }},
+    "quality_verdict": {{
+      "signal": "High Quality|Medium Quality|Low Quality",
+      "confidence": "High|Medium|Low",
+      "altman_z": "Safe Zone|Grey Zone|Distress Zone",
+      "piotroski_f": "Strong|Neutral|Weak",
+      "reasoning": "One sentence about {ticker}'s quality"
+    }},
+    "growth_verdict": {{
+      "signal": "High Growth|Moderate Growth|Stable|Declining",
+      "confidence": "High|Medium|Low",
+      "revenue_trajectory": "Accelerating|Stable|Decelerating",
+      "reasoning": "One sentence about {ticker}'s growth"
+    }},
+    "financial_health": {{
+      "signal": "Strong|Adequate|Weak",
+      "leverage_status": "Low|Moderate|High",
+      "liquidity_status": "Strong|Adequate|Weak"
+    }},
+    "key_strengths": ["strength 1 of {ticker}", "strength 2 of {ticker}", "strength 3 of {ticker}"],
+    "key_risks": ["risk 1 for {ticker}", "risk 2 for {ticker}", "risk 3 for {ticker}"],
+    "investment_thesis": {{
+      "bull_case": "One sentence bull case for {ticker}",
+      "bear_case": "One sentence bear case for {ticker}"
+    }}
+  }}
+}}
+
+**CRITICAL: All analysis must be about {ticker} ({company_name}). Return ONLY valid JSON.**"""
 
         return PromptTemplate.from_template(template)
     
     def _create_valuation_prompt(self) -> PromptTemplate:
         """Create prompt focused on valuation analysis"""
         
-        template = """You are a valuation expert analyzing whether a stock is fairly priced.
+        template = """You are a valuation expert analyzing whether {ticker} is fairly priced.
+
+**ANALYZING: {ticker} ({company_name})**
 
 === COMPANY INFORMATION ===
 Ticker: {ticker}
@@ -227,50 +311,52 @@ Sector: {sector}
 Industry: {industry}
 Market Cap: ${market_cap:,}
 
-=== FUNDAMENTAL DATA ===
+=== FUNDAMENTAL DATA FOR {ticker} ===
 {fundamental_data}
 
 === RAW METRICS ===
 {raw_data}
 
-=== VALUATION ANALYSIS FRAMEWORK ===
+=== VALUATION ANALYSIS FRAMEWORK FOR {ticker} ===
 
-Analyze the stock's valuation using multiple approaches appropriate for its sector:
+**You are analyzing {ticker} ONLY. Do not discuss any other stock.**
 
-1. **RELATIVE VALUATION**
+Analyze {ticker}'s valuation using multiple approaches appropriate for its sector:
+
+1. **RELATIVE VALUATION OF {ticker}**
    Select the most relevant metrics for this {sector} company:
-   - P/E analysis: Current vs forward, vs peers, vs historical
-   - P/B analysis: Appropriate for asset-heavy businesses
-   - P/S analysis: Useful for growth companies or when earnings volatile
-   - EV/EBITDA: Best for comparing companies with different capital structures
-   - PEG ratio: Growth-adjusted P/E interpretation
+   - P/E analysis for {ticker}: Current vs forward, vs peers, vs historical
+   - P/B analysis for {ticker}: Appropriate for asset-heavy businesses
+   - P/S analysis for {ticker}: Useful for growth companies or when earnings volatile
+   - EV/EBITDA for {ticker}: Best for comparing companies with different capital structures
+   - PEG ratio for {ticker}: Growth-adjusted P/E interpretation
 
-2. **YIELD-BASED VALUATION**
-   - Earnings yield vs bond yields
-   - FCF yield analysis
-   - Dividend yield vs historical and sector
+2. **YIELD-BASED VALUATION OF {ticker}**
+   - Earnings yield vs bond yields for {ticker}
+   - FCF yield analysis for {ticker}
+   - Dividend yield vs historical and sector for {ticker}
 
-3. **ASSET-BASED CONSIDERATIONS**
-   - Book value per share analysis
-   - Tangible book value if relevant
+3. **ASSET-BASED CONSIDERATIONS FOR {ticker}**
+   - Book value per share analysis for {ticker}
+   - Tangible book value if relevant for {ticker}
 
-4. **PEER COMPARISON**
-   - How do multiples compare to direct competitors?
-   - Premium/discount justification
+4. **PEER COMPARISON FOR {ticker}**
+   - How do {ticker}'s multiples compare to direct competitors?
+   - Premium/discount justification for {ticker}
 
-5. **HISTORICAL CONTEXT**
-   - Current multiples vs 5-year averages
-   - Position in valuation range
+5. **HISTORICAL CONTEXT FOR {ticker}**
+   - {ticker}'s current multiples vs 5-year averages
+   - {ticker}'s position in valuation range
 
-6. **VALUATION CONCLUSION**
-   - Synthesize findings
-   - Note what the valuation implies about market expectations
-   - Identify if valuation is justified by fundamentals
+6. **VALUATION CONCLUSION FOR {ticker}**
+   - Synthesize findings about {ticker}
+   - Note what the valuation implies about market expectations for {ticker}
+   - Identify if {ticker}'s valuation is justified by fundamentals
 
-DO NOT recommend buy/sell. Provide objective valuation assessment only.
-Keep analysis to 400-500 words.
+DO NOT recommend buy/sell. Provide objective valuation assessment of {ticker} only.
+Keep analysis to 400-500 words about {ticker}.
 
-Begin your valuation analysis:"""
+Begin your valuation analysis of {ticker}:"""
 
         return PromptTemplate.from_template(template)
     
@@ -279,6 +365,8 @@ Begin your valuation analysis:"""
         
         template = """You are a financial quality analyst assessing earnings quality and financial health.
 
+**ANALYZING: {ticker} ({company_name})**
+
 === COMPANY INFORMATION ===
 Ticker: {ticker}
 Company: {company_name}
@@ -286,56 +374,58 @@ Sector: {sector}
 Industry: {industry}
 Market Cap: ${market_cap:,}
 
-=== FUNDAMENTAL DATA ===
+=== FUNDAMENTAL DATA FOR {ticker} ===
 {fundamental_data}
 
 === RAW METRICS ===
 {raw_data}
 
-=== QUALITY ANALYSIS FRAMEWORK ===
+=== QUALITY ANALYSIS FRAMEWORK FOR {ticker} ===
 
-Assess the company's financial quality using these frameworks:
+**You must analyze {ticker} ONLY. Every statement must be about {ticker}.**
 
-1. **EARNINGS QUALITY ASSESSMENT**
-   - Quality of Earnings ratio (CFO/Net Income): Is cash backing earnings?
-   - Accruals ratio: High accruals signal potential manipulation
-   - Revenue recognition patterns (if observable)
-   - Operating leverage effects
+Assess {ticker}'s financial quality using these frameworks:
 
-2. **ALTMAN Z-SCORE ANALYSIS**
-   - Interpret the Z-Score in context
-   - Identify which components are strongest/weakest
-   - Appropriate for {industry}?
+1. **EARNINGS QUALITY ASSESSMENT OF {ticker}**
+   - Quality of Earnings ratio (CFO/Net Income) for {ticker}: Is cash backing earnings?
+   - Accruals ratio for {ticker}: High accruals signal potential manipulation
+   - Revenue recognition patterns for {ticker} (if observable)
+   - Operating leverage effects for {ticker}
 
-3. **PIOTROSKI F-SCORE BREAKDOWN**
-   - Analyze each of the 9 signals if possible
-   - What does the score tell us about financial trajectory?
+2. **ALTMAN Z-SCORE ANALYSIS OF {ticker}**
+   - Interpret {ticker}'s Z-Score in context
+   - Identify which components are strongest/weakest for {ticker}
+   - Appropriate for {ticker}'s industry?
 
-4. **DUPONT ANALYSIS**
-   - Decompose ROE into three drivers
-   - Which driver is most responsible for returns?
-   - Is the ROE sustainable or engineered through leverage?
+3. **PIOTROSKI F-SCORE BREAKDOWN OF {ticker}**
+   - Analyze each of the 9 signals for {ticker} if possible
+   - What does {ticker}'s score tell us about financial trajectory?
 
-5. **BALANCE SHEET QUALITY**
-   - Asset quality considerations
-   - Liability structure appropriateness
-   - Off-balance sheet concerns (if any indicators)
+4. **DUPONT ANALYSIS OF {ticker}**
+   - Decompose {ticker}'s ROE into three drivers
+   - Which driver is most responsible for {ticker}'s returns?
+   - Is {ticker}'s ROE sustainable or engineered through leverage?
 
-6. **CASH FLOW QUALITY**
-   - Operating cash flow trends
-   - CapEx requirements
-   - Free cash flow sustainability
+5. **BALANCE SHEET QUALITY OF {ticker}**
+   - Asset quality considerations for {ticker}
+   - Liability structure appropriateness for {ticker}
+   - Off-balance sheet concerns for {ticker} (if any indicators)
 
-7. **QUALITY CONCLUSION**
-   - Overall financial quality rating
-   - Key areas of strength
-   - Key areas of concern
-   - Red flags to monitor
+6. **CASH FLOW QUALITY OF {ticker}**
+   - Operating cash flow trends for {ticker}
+   - CapEx requirements for {ticker}
+   - Free cash flow sustainability for {ticker}
 
-Focus on objective quality assessment. No buy/sell recommendations.
-Keep analysis to 400-500 words.
+7. **QUALITY CONCLUSION FOR {ticker}**
+   - Overall financial quality rating for {ticker}
+   - Key areas of strength for {ticker}
+   - Key areas of concern for {ticker}
+   - Red flags to monitor for {ticker}
 
-Begin your quality analysis:"""
+Focus on objective quality assessment of {ticker}. No buy/sell recommendations.
+Keep analysis to 400-500 words about {ticker}.
+
+Begin your quality analysis of {ticker}:"""
 
         return PromptTemplate.from_template(template)
     
@@ -344,6 +434,8 @@ Begin your quality analysis:"""
         
         template = """You are a dividend analyst assessing dividend safety and sustainability.
 
+**ANALYZING: {ticker} ({company_name})**
+
 === COMPANY INFORMATION ===
 Ticker: {ticker}
 Company: {company_name}
@@ -351,63 +443,65 @@ Sector: {sector}
 Industry: {industry}
 Market Cap: ${market_cap:,}
 
-=== FUNDAMENTAL DATA ===
+=== FUNDAMENTAL DATA FOR {ticker} ===
 {fundamental_data}
 
 === RAW METRICS ===
 {raw_data}
 
-=== DIVIDEND ANALYSIS FRAMEWORK ===
+=== DIVIDEND ANALYSIS FRAMEWORK FOR {ticker} ===
 
-Analyze dividend sustainability using these criteria:
+**You are analyzing {ticker}'s dividend only. Do not discuss other stocks.**
 
-1. **CURRENT DIVIDEND PROFILE**
-   - Current yield vs sector average
-   - Current yield vs historical average
-   - Yield attractiveness in current rate environment
+Analyze {ticker}'s dividend sustainability using these criteria:
 
-2. **PAYOUT SUSTAINABILITY**
-   - Earnings payout ratio: Is it sustainable (<60% generally safe)?
-   - FCF payout ratio: Cash-based coverage
-   - Coverage ratios: How many times can dividend be paid?
+1. **CURRENT DIVIDEND PROFILE OF {ticker}**
+   - {ticker}'s current yield vs sector average
+   - {ticker}'s current yield vs historical average
+   - {ticker}'s yield attractiveness in current rate environment
 
-3. **EARNINGS STABILITY**
-   - Earnings volatility (affects dividend safety)
-   - Revenue stability
-   - Margin trends
+2. **PAYOUT SUSTAINABILITY OF {ticker}**
+   - {ticker}'s earnings payout ratio: Is it sustainable (<60% generally safe)?
+   - {ticker}'s FCF payout ratio: Cash-based coverage
+   - Coverage ratios for {ticker}: How many times can dividend be paid?
 
-4. **BALANCE SHEET SUPPORT**
-   - Cash reserves relative to dividend obligation
-   - Debt levels that could pressure dividend
-   - Liquidity adequacy
+3. **EARNINGS STABILITY OF {ticker}**
+   - {ticker}'s earnings volatility (affects dividend safety)
+   - {ticker}'s revenue stability
+   - {ticker}'s margin trends
 
-5. **GROWTH POTENTIAL**
-   - Room for dividend growth based on payout ratio
-   - Historical dividend growth (if available)
-   - Earnings growth to support future increases
+4. **BALANCE SHEET SUPPORT FOR {ticker}**
+   - {ticker}'s cash reserves relative to dividend obligation
+   - {ticker}'s debt levels that could pressure dividend
+   - {ticker}'s liquidity adequacy
 
-6. **SECTOR CONSIDERATIONS**
-   - How does dividend policy compare to {sector} norms?
-   - Industry-specific dividend expectations
+5. **GROWTH POTENTIAL FOR {ticker}**
+   - Room for dividend growth based on {ticker}'s payout ratio
+   - {ticker}'s historical dividend growth (if available)
+   - {ticker}'s earnings growth to support future increases
 
-7. **RISK FACTORS**
-   - What could threaten the dividend?
-   - Economic sensitivity
-   - Capital allocation priorities
+6. **SECTOR CONSIDERATIONS FOR {ticker}**
+   - How does {ticker}'s dividend policy compare to {sector} norms?
+   - Industry-specific dividend expectations for {ticker}
 
-8. **DIVIDEND SUSTAINABILITY SCORE**
-   - Overall assessment of dividend safety
-   - Likelihood of cuts vs. growth
-   - Income investor suitability
+7. **RISK FACTORS FOR {ticker}**
+   - What could threaten {ticker}'s dividend?
+   - {ticker}'s economic sensitivity
+   - {ticker}'s capital allocation priorities
 
-For non-dividend payers, discuss:
-- Why no dividend?
-- Likelihood of initiation
-- Capital allocation priorities
+8. **DIVIDEND SUSTAINABILITY SCORE FOR {ticker}**
+   - Overall assessment of {ticker}'s dividend safety
+   - Likelihood of cuts vs. growth for {ticker}
+   - Income investor suitability for {ticker}
 
-Keep analysis to 400-500 words.
+For non-dividend payers like {ticker}, discuss:
+- Why does {ticker} not pay dividends?
+- Likelihood of {ticker} initiating dividends
+- {ticker}'s capital allocation priorities
 
-Begin your dividend analysis:"""
+Keep analysis to 400-500 words about {ticker}.
+
+Begin your dividend analysis of {ticker}:"""
 
         return PromptTemplate.from_template(template)
     
@@ -416,6 +510,8 @@ Begin your dividend analysis:"""
         
         template = """You are a growth analyst evaluating a company's growth profile and sustainability.
 
+**ANALYZING: {ticker} ({company_name})**
+
 === COMPANY INFORMATION ===
 Ticker: {ticker}
 Company: {company_name}
@@ -423,67 +519,69 @@ Sector: {sector}
 Industry: {industry}
 Market Cap: ${market_cap:,}
 
-=== FUNDAMENTAL DATA ===
+=== FUNDAMENTAL DATA FOR {ticker} ===
 {fundamental_data}
 
 === RAW METRICS ===
 {raw_data}
 
-=== GROWTH ANALYSIS FRAMEWORK ===
+=== GROWTH ANALYSIS FRAMEWORK FOR {ticker} ===
 
-Analyze growth prospects using these dimensions:
+**You must analyze {ticker} ONLY. All statements must be about {ticker}.**
 
-1. **HISTORICAL GROWTH REVIEW**
-   - Revenue growth: YoY and multi-year CAGR
-   - Earnings growth: Quality and consistency
-   - EBITDA growth: Operating leverage
-   - Book value growth: Wealth creation
+Analyze {ticker}'s growth prospects using these dimensions:
 
-2. **GROWTH QUALITY ASSESSMENT**
-   - Organic vs. inorganic (M&A-driven)?
-   - Margin expansion contributing to earnings growth?
-   - One-time items inflating/deflating growth?
+1. **HISTORICAL GROWTH REVIEW OF {ticker}**
+   - {ticker}'s revenue growth: YoY and multi-year CAGR
+   - {ticker}'s earnings growth: Quality and consistency
+   - {ticker}'s EBITDA growth: Operating leverage
+   - {ticker}'s book value growth: Wealth creation
 
-3. **GROWTH DRIVERS**
-   - What's driving the growth (based on sector)?
-   - Market share gains vs. market expansion?
-   - Pricing power vs. volume growth?
-   - New products/services?
+2. **GROWTH QUALITY ASSESSMENT OF {ticker}**
+   - Is {ticker}'s growth organic vs. inorganic (M&A-driven)?
+   - Is margin expansion contributing to {ticker}'s earnings growth?
+   - Are one-time items inflating/deflating {ticker}'s growth?
 
-4. **REINVESTMENT ANALYSIS**
-   - How much is being reinvested for growth?
-   - Returns on reinvested capital (ROIC vs WACC implied)
-   - CapEx intensity and trends
+3. **GROWTH DRIVERS OF {ticker}**
+   - What's driving {ticker}'s growth (based on sector)?
+   - Is {ticker} gaining market share vs. market expansion?
+   - Does {ticker} have pricing power vs. volume growth?
+   - Does {ticker} have new products/services?
 
-5. **MARGIN TRAJECTORY**
-   - Gross margin trends (pricing power, cost control)
-   - Operating margin trends (operating leverage)
-   - Net margin trends (financial efficiency)
+4. **REINVESTMENT ANALYSIS OF {ticker}**
+   - How much is {ticker} reinvesting for growth?
+   - {ticker}'s returns on reinvested capital (ROIC vs WACC implied)
+   - {ticker}'s CapEx intensity and trends
 
-6. **GROWTH SUSTAINABILITY**
-   - Can current growth rates be maintained?
-   - Market opportunity remaining
-   - Competitive position strength
+5. **MARGIN TRAJECTORY OF {ticker}**
+   - {ticker}'s gross margin trends (pricing power, cost control)
+   - {ticker}'s operating margin trends (operating leverage)
+   - {ticker}'s net margin trends (financial efficiency)
 
-7. **GROWTH VS. VALUATION**
-   - Is growth appropriately reflected in valuation?
-   - PEG ratio interpretation
-   - Growth-adjusted metrics
+6. **GROWTH SUSTAINABILITY OF {ticker}**
+   - Can {ticker} maintain current growth rates?
+   - {ticker}'s market opportunity remaining
+   - {ticker}'s competitive position strength
 
-8. **GROWTH RISKS**
-   - What could derail the growth story?
-   - Dependency risks
-   - Competition and disruption
+7. **GROWTH VS. VALUATION OF {ticker}**
+   - Is {ticker}'s growth appropriately reflected in valuation?
+   - {ticker}'s PEG ratio interpretation
+   - Growth-adjusted metrics for {ticker}
 
-9. **GROWTH OUTLOOK**
-   - Near-term vs long-term growth potential
-   - Catalyst identification
-   - Inflection points
+8. **GROWTH RISKS FOR {ticker}**
+   - What could derail {ticker}'s growth story?
+   - {ticker}'s dependency risks
+   - Competition and disruption facing {ticker}
 
-Focus on objective growth assessment. No buy/sell recommendations.
-Keep analysis to 400-500 words.
+9. **GROWTH OUTLOOK FOR {ticker}**
+   - {ticker}'s near-term vs long-term growth potential
+   - Catalyst identification for {ticker}
+   - Inflection points for {ticker}
 
-Begin your growth analysis:"""
+Focus on objective growth assessment of {ticker}. No buy/sell recommendations.
+Keep analysis to 400-500 words about {ticker}.
+
+Begin your growth analysis of {ticker}:"""
 
         return PromptTemplate.from_template(template)
     
