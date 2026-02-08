@@ -452,6 +452,11 @@ class SentimentDataFetcher:
         }
         logger.info(f"Available sources: {[k for k, v in self.available_sources.items() if v]}")
     
+    @staticmethod
+    def _normalize_datetime(dt: datetime) -> datetime:
+        """Remove timezone info for comparison"""
+        return dt.replace(tzinfo=None) if dt.tzinfo else dt
+
     def fetch_company_news(self, ticker: str, company_name: str = None, max_items: int = 30, use_cache: bool = True) -> Dict:
         """Fetch all available news for a specific company."""
         cache_key = f"company_{ticker}"
@@ -503,7 +508,7 @@ class SentimentDataFetcher:
             if key and key not in seen:
                 seen.add(key)
                 unique.append(article)
-        unique.sort(key=lambda x: x.published_at, reverse=True)
+        unique.sort(key=lambda x: self._normalize_datetime(x.published_at), reverse=True)
         unique = unique[:max_items]
         
         if self.cache and unique:
@@ -550,6 +555,8 @@ class SentimentDataFetcher:
             if key not in seen:
                 seen.add(key)
                 unique.append(a)
+                
+        unique.sort(key=lambda x: self._normalize_datetime(x.published_at), reverse=True)
         unique = unique[:max_items]
         
         if self.cache and unique:

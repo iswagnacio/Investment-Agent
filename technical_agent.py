@@ -115,11 +115,11 @@ if __name__ == "__main__":
     agent = TechnicalAnalyzerAgent()
     
     print("=== Single Stock Analysis ===")
-    print(agent.analyze("AAPL"))
+    print(agent.analyze("HOOD"))
     
     print("\n" + "="*80 + "\n")
     
-    print("=== Batch Analysis (Different Sectors/Sizes) ===")
+    '''print("=== Batch Analysis (Different Sectors/Sizes) ===")
     tickers = ["AAPL", "JPM", "TSLA"]  # Tech large-cap, Financial, Volatile growth
     results = agent.batch_analyze(tickers)
     
@@ -127,4 +127,4 @@ if __name__ == "__main__":
         print(f"\n{ticker}:")
         print("-" * 80)
         print(analysis)
-        print()
+        print()'''

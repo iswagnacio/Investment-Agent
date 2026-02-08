@@ -44,7 +44,7 @@ class FundamentalAnalystAgent:
             raise ValueError("ANTHROPIC_API_KEY environment variable not set")
         
         self.calculator = FundamentalCalculator()
-        self.llm = ChatAnthropic(model_name=model, temperature=0)
+        self.llm = ChatAnthropic(model_name=model, temperature=0, max_tokens = 4096)
     
     def analyze(self, ticker: str, analysis_type: str = "comprehensive") -> str:
         """
