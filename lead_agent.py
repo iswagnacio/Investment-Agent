@@ -6,15 +6,11 @@ Comprehensive investment analysis combining:
 - Fundamental Analysis (valuation, quality, growth metrics)
 - Sentiment Analysis (news sentiment, market perception)
 
-UPDATED: Continuous LLM Decision Approach
-- LLM self-assesses if detailed fundamental analysis is needed
-- Intelligent context-aware decisions (not hardcoded rules)
-- Only fetches detailed when truly necessary (~20% of stocks)
-
-FIXED: Ticker mismatch bugs
-- Parse JSON from for_synthesis response
-- Validate ticker in detailed analysis with retry
-- Fix synthesis prompt template to avoid variable conflicts
+UPDATED: Unified structured pipeline for both technical and fundamental agents
+- Both specialist agents provide structured JSON signals via for_synthesis
+- Lead agent self-assesses whether EITHER domain needs detailed analysis
+- Symmetric handling: _prepare_technical_summary mirrors _prepare_fundamental_summary
+- Validated fetch with retry for both detailed analyses
 
 Provides:
 - Holistic company assessment
@@ -598,10 +594,11 @@ class GeneralAnalystAgent:
     Comprehensive investment analyst combining technical, fundamental,
     and sentiment analysis with LLM-powered insights.
     
-    FIXED: Ticker mismatch bugs resolved:
-    1. JSON parsing for for_synthesis responses
-    2. Ticker validation with retry for detailed analysis
-    3. Single-stage prompt formatting to avoid template variable conflicts
+    UPDATED: Unified structured pipeline
+    - Both technical and fundamental agents provide structured JSON via for_synthesis
+    - Assessment stage evaluates BOTH domains for detailed analysis needs
+    - Symmetric _prepare_*_summary methods
+    - Validated fetch with retry for both detailed analyses
     """
     
     def __init__(self, model: str = "claude-sonnet-4-5", use_specialist_agents: bool = True):
@@ -630,19 +627,21 @@ class GeneralAnalystAgent:
                 except Exception as e:
                     print(f"Warning: Could not initialize FundamentalAnalystAgent: {e}")
         
-        self.llm = ChatAnthropic(model_name=model, temperature=0, max_tokens = 4096)
+        self.llm = ChatAnthropic(model_name=model, temperature=0, max_tokens=4096)
     
     def gather_data(self, ticker: str) -> Dict[str, Any]:
         """
         Gather all data for analysis.
         
-        FIX #1: Parse JSON from for_synthesis response so that
-        _prepare_fundamental_summary gets a dict, not a string.
+        UPDATED: Both technical and fundamental agents use for_synthesis mode.
+        Detailed analysis for either is deferred to the assessment stage.
         """
         ticker = ticker.upper()
         data: Dict[str, Any] = {'ticker': ticker}
         
-        # Technical data
+        # =====================================================================
+        # Technical data (raw indicators for scoring)
+        # =====================================================================
         try:
             data['technical'] = self.technical.get_all_indicators(ticker)
             data['stock_info'] = self.technical.get_stock_info(ticker)
@@ -651,16 +650,43 @@ class GeneralAnalystAgent:
             data['stock_info'] = {'name': ticker, 'sector': 'Unknown', 'industry': 'Unknown'}
             data['technical_error'] = str(e)
         
-        # Technical agent insight
+        # =====================================================================
+        # Technical agent structured signals (NEW: mirrors fundamental pattern)
+        # =====================================================================
         if self.use_specialist_agents and self.technical_agent:
             try:
-                data['technical_insight'] = self.technical_agent.analyze(ticker)
+                raw_response = self.technical_agent.analyze(
+                    ticker, analysis_type="for_synthesis"
+                )
+                
+                # Validate the response is about the right ticker
+                if not validate_ticker_in_text(raw_response, ticker, min_mentions=2):
+                    print(f"⚠️  WARNING: technical for_synthesis response may be for wrong ticker!")
+                    raw_response = self.technical_agent.analyze(
+                        ticker, analysis_type="for_synthesis"
+                    )
+                
+                # Parse JSON from response
+                parsed = extract_json_from_text(raw_response)
+                if parsed and isinstance(parsed, dict):
+                    data['technical_structured'] = parsed
+                    print(f"   ✓ Parsed structured technical signals for {ticker}")
+                else:
+                    data['technical_structured'] = raw_response
+                    print(f"   ⚠ Could not parse JSON from technical for_synthesis, using raw text")
+                    
             except Exception as e:
-                data['technical_insight'] = None
+                data['technical_structured'] = None
+                data['technical_structured_error'] = str(e)
         else:
-            data['technical_insight'] = None
+            data['technical_structured'] = None
         
+        # Detailed technical deferred to assessment stage
+        data['technical_detailed'] = None
+        
+        # =====================================================================
         # Fundamental raw data (for scoring)
+        # =====================================================================
         try:
             data['fundamental'] = self.fundamental.get_all_fundamentals(ticker)
         except Exception as e:
@@ -668,39 +694,27 @@ class GeneralAnalystAgent:
             data['fundamental_error'] = str(e)
         
         # =====================================================================
-        # FIX #1: Parse JSON from for_synthesis response
-        # 
-        # fundamental_agent.analyze() returns a string with a header like:
-        #   "=== FUNDAMENTAL ANALYSIS FOR HOOD (...) ===\n\n{...json...}"
-        # We need to extract the JSON dict so _prepare_fundamental_summary
-        # can use it properly instead of falling back to basic metrics.
+        # Fundamental agent structured signals
         # =====================================================================
         if self.use_specialist_agents and self.fundamental_agent:
             try:
                 raw_response = self.fundamental_agent.analyze(
-                    ticker, 
-                    analysis_type="for_synthesis"
+                    ticker, analysis_type="for_synthesis"
                 )
                 
-                # Validate the response is about the right ticker
                 if not validate_ticker_in_text(raw_response, ticker, min_mentions=2):
-                    print(f"⚠️  WARNING: for_synthesis response may be for wrong ticker!")
-                    print(f"   Expected: {ticker}")
-                    print(f"   First 200 chars: {raw_response[:200]}")
-                    # Retry once
+                    print(f"⚠️  WARNING: fundamental for_synthesis response may be for wrong ticker!")
                     raw_response = self.fundamental_agent.analyze(
                         ticker, analysis_type="for_synthesis"
                     )
                 
-                # Try to parse the JSON from the response
                 parsed = extract_json_from_text(raw_response)
                 if parsed and isinstance(parsed, dict):
                     data['fundamental_structured'] = parsed
                     print(f"   ✓ Parsed structured fundamental signals for {ticker}")
                 else:
-                    # Store the raw string as fallback
                     data['fundamental_structured'] = raw_response
-                    print(f"   ⚠ Could not parse JSON from for_synthesis, using raw text")
+                    print(f"   ⚠ Could not parse JSON from fundamental for_synthesis, using raw text")
                     
             except Exception as e:
                 data['fundamental_structured'] = None
@@ -708,10 +722,12 @@ class GeneralAnalystAgent:
         else:
             data['fundamental_structured'] = None
         
-        # NOTE: We do NOT fetch detailed here - synthesis LLM will decide
+        # Detailed fundamental deferred to assessment stage
         data['fundamental_detailed'] = None
         
+        # =====================================================================
         # Sentiment data
+        # =====================================================================
         try:
             company_name = data.get('stock_info', {}).get('name', ticker)
             industry = data.get('stock_info', {}).get('industry', '')
@@ -781,7 +797,7 @@ class GeneralAnalystAgent:
             current_price = data.get('fundamental', {}).get('valuation_ratios', {}).get('price', 0)
         
         if not current_price:
-            return {'low': 0, 'mid': 0, 'high': 0, 'timeframe': '3-6 months'}
+            return {'low': 0, 'mid': 0, 'high': 0, 'current': 0, 'timeframe': '3-6 months'}
         
         score = scores['overall']
         
@@ -816,39 +832,46 @@ class GeneralAnalystAgent:
             'timeframe': '3-6 months'
         }
     
-    def _fetch_detailed_with_validation(self, ticker: str, max_retries: int = 2) -> Optional[str]:
+    # =========================================================================
+    # Validated Fetch Helpers (with retry for both domains)
+    # =========================================================================
+    
+    def _fetch_detailed_with_validation(self, domain: str, ticker: str, 
+                                         max_retries: int = 2) -> Optional[str]:
         """
-        FIX #2: Fetch detailed fundamental analysis with ticker validation.
+        Fetch detailed analysis with ticker validation and retry.
+        Works for both 'technical' and 'fundamental' domains.
+        """
+        if domain == "technical":
+            agent = self.technical_agent
+            analysis_type = "comprehensive"
+        elif domain == "fundamental":
+            agent = self.fundamental_agent
+            analysis_type = "comprehensive"
+        else:
+            return None
         
-        The fundamental_agent LLM can hallucinate and analyze the wrong company.
-        This method validates the response and retries if needed.
-        """
-        if not self.fundamental_agent:
+        if not agent:
             return None
         
         for attempt in range(max_retries):
             try:
-                print(f"   Fetching detailed analysis for: {ticker} (attempt {attempt + 1})")
-                detailed = self.fundamental_agent.analyze(
-                    ticker,
-                    analysis_type="comprehensive"
-                )
+                print(f"   Fetching detailed {domain} analysis for: {ticker} (attempt {attempt + 1})")
+                detailed = agent.analyze(ticker, analysis_type=analysis_type)
                 
                 # Validate the response is about the correct ticker
                 if validate_ticker_in_text(detailed, ticker, min_mentions=5):
-                    print(f"   ✓ Detailed analysis validated for {ticker}")
+                    print(f"   ✓ Detailed {domain} analysis validated for {ticker}")
                     return detailed
                 else:
-                    # Check what ticker it actually analyzed
-                    # Look for "ANALYZING: XXXX" pattern
                     wrong_match = re.search(r'ANALYZING:\s*(\w+)', detailed)
                     wrong_ticker = wrong_match.group(1) if wrong_match else "UNKNOWN"
-                    print(f"   ⚠️  Attempt {attempt + 1}: Analysis is for {wrong_ticker}, not {ticker}!")
+                    print(f"   ⚠️  Attempt {attempt + 1}: {domain} analysis is for {wrong_ticker}, not {ticker}!")
                     
                     if attempt < max_retries - 1:
                         print(f"   Retrying...")
                     else:
-                        print(f"   ✗ Failed after {max_retries} attempts. Discarding detailed analysis.")
+                        print(f"   ✗ Failed after {max_retries} attempts. Discarding detailed {domain} analysis.")
                         return None
                         
             except Exception as e:
@@ -858,233 +881,140 @@ class GeneralAnalystAgent:
         
         return None
     
-    def generate_llm_analysis(self, data: Dict[str, Any], scores: Dict[str, Any], 
-                             targets: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        TWO-STAGE SYNTHESIS WITH SELF-ASSESSMENT.
-        
-        FIX #3: Uses single-stage prompt formatting to avoid template variable
-        conflicts. Previously, double-brace {{ticker}} was used for two-stage
-        formatting, which was fragile when pre-formatted strings contained
-        curly braces from analysis text.
-        """
-        
-        ticker = data['ticker']
-        stock_info = data.get('stock_info', {})
-        company_name = stock_info.get('name', ticker)
-        sector = stock_info.get('sector', 'Unknown')
-        industry = stock_info.get('industry', 'Unknown')
-        
-        # Prepare summaries
-        tech_summary = self._prepare_technical_summary(data)
-        fund_summary = self._prepare_fundamental_summary(data)
-        sent_summary = self._format_sentiment_data(data.get('sentiment', {}))[:800]
-        
-        scores_text = f"""Technical: {scores['technical']['score']:.1f}/100
-Fundamental: {scores['fundamental']['score']:.1f}/100
-Sentiment: {scores['sentiment']['score']:.1f}/100
-Overall: {scores['overall']:.1f}/100"""
-        
-        tech = data.get('technical', {})
-        volatility = tech.get('volatility', {}).get('historical_vol', 0.3)
-        options_strategy, options_rationale = self.scorer.determine_options_strategy(
-            scores['signal'], volatility, sentiment_score=scores['sentiment']['score']
-        )
-        
-        current_price = targets['current']
-        
-        # =====================================================================
-        # STAGE 1: SELF-ASSESSMENT - Does LLM need detailed fundamental?
-        # =====================================================================
-        
-        # FIX #3: Build assessment prompt as a plain string, no .format() issues
-        assessment_text_prompt = self._build_assessment_prompt(
-            ticker=ticker,
-            company_name=company_name,
-            sector=sector,
-            industry=industry,
-            current_price=current_price,
-            technical_summary=tech_summary,
-            fundamental_summary=fund_summary,
-            sentiment_summary=sent_summary,
-            scores_summary=scores_text,
-            signal=scores['signal'].value,
-            confidence=scores['confidence']
-        )
-        
-        assessment_response = self.llm.invoke(assessment_text_prompt)
-        
-        # Parse assessment
-        if isinstance(assessment_response.content, str):
-            assessment_text = assessment_response.content
-        elif isinstance(assessment_response.content, list):
-            text_parts = [item for item in assessment_response.content if isinstance(item, str)]
-            assessment_text = '\n'.join(text_parts) if text_parts else str(assessment_response.content)
-        else:
-            assessment_text = str(assessment_response.content)
-        
-        needs_detailed, reason = self._parse_assessment(assessment_text)
-        
-        # =====================================================================
-        # CONDITIONAL FETCH: Get detailed if LLM determined it's needed
-        # FIX #2: Use validated fetch with retry
-        # =====================================================================
-        
-        fund_detailed = None
-        if needs_detailed:
-            print(f"\n🔍 {ticker}: LLM requesting detailed fundamental analysis")
-            print(f"   Reason: {reason}\n")
-            
-            fund_detailed = self._fetch_detailed_with_validation(ticker)
-            
-            if fund_detailed:
-                # Update fundamental summary to include detailed
-                fund_summary = self._prepare_fundamental_summary(data, detailed=fund_detailed)
-            else:
-                reason = f"Requested but validation failed after retries"
-        
-        # =====================================================================
-        # STAGE 2: FINAL SYNTHESIS
-        # FIX #3: Build prompt as plain string to avoid template conflicts
-        # =====================================================================
-        
-        if fund_detailed:
-            detailed_status = "received detailed fundamental analysis"
-            detail_fetch_info = f"DETAILED FUNDAMENTAL ANALYSIS WAS FETCHED\nReason: {reason}"
-            additional_context = f"- How does the detailed fundamental context resolve any ambiguities about {ticker}?"
-        else:
-            detailed_status = "determined structured signals are sufficient"
-            detail_fetch_info = "STRUCTURED SIGNALS WERE SUFFICIENT"
-            additional_context = ""
-        
-        synthesis_text_prompt = self._build_synthesis_prompt(
-            ticker=ticker,
-            company_name=company_name,
-            sector=sector,
-            industry=industry,
-            current_price=current_price,
-            technical_summary=tech_summary,
-            fundamental_summary=fund_summary,
-            sentiment_summary=sent_summary,
-            scores_summary=scores_text,
-            signal=scores['signal'].value,
-            confidence=scores['confidence'],
-            price_target_low=targets['low'],
-            price_target_mid=targets['mid'],
-            price_target_high=targets['high'],
-            target_timeframe=targets['timeframe'],
-            options_strategy=options_strategy.value,
-            detailed_status=detailed_status,
-            detail_fetch_info=detail_fetch_info,
-            additional_context=additional_context
-        )
-        
-        synthesis_response = self.llm.invoke(synthesis_text_prompt)
-        
-        if isinstance(synthesis_response.content, str):
-            analysis_text = synthesis_response.content
-        elif isinstance(synthesis_response.content, list):
-            text_parts = [item for item in synthesis_response.content if isinstance(item, str)]
-            analysis_text = '\n'.join(text_parts) if text_parts else str(synthesis_response.content)
-        else:
-            analysis_text = str(synthesis_response.content)
-        
-        # =====================================================================
-        # FINAL VALIDATION: Ensure synthesis is about the right ticker
-        # =====================================================================
-        if not validate_ticker_in_text(analysis_text, ticker, min_mentions=3):
-            print(f"⚠️  WARNING: Final synthesis may not be about {ticker}!")
-            print(f"   Adding explicit header to correct this.")
-            analysis_text = (
-                f"[NOTE: This analysis is for {ticker} ({company_name})]\n\n"
-                + analysis_text
-            )
-        
-        return {
-            'full_analysis': analysis_text,
-            'options_strategy': options_strategy,
-            'options_rationale': options_rationale,
-            'used_detailed_fundamental': bool(fund_detailed),
-            'detail_fetch_reason': reason if fund_detailed else None,
-            'llm_requested_detailed': needs_detailed
-        }
+    # =========================================================================
+    # Summary Preparation (Symmetric for both domains)
+    # =========================================================================
     
-    def _parse_assessment(self, text: str) -> tuple:
-        """Parse the LLM's self-assessment response."""
-        needs_detailed = False
-        reason = "Structured signals sufficient"
+    def _prepare_technical_summary(self, data: Dict, detailed: str = None) -> str:
+        """
+        Prepare technical summary for LLM.
         
-        try:
-            if '<decision>' in text and '</decision>' in text:
-                start = text.find('<decision>') + 10
-                end = text.find('</decision>')
-                decision = text[start:end].strip().upper()
-                needs_detailed = decision == 'YES'
+        UPDATED: Now mirrors _prepare_fundamental_summary pattern.
+        Uses structured signals from technical agent when available.
+        Falls back to raw indicator formatting.
+        """
+        ticker = data.get('ticker', 'UNKNOWN')
+        tech_structured = data.get('technical_structured')
+        
+        # Check if we got a properly parsed dict
+        if isinstance(tech_structured, dict):
+            llm_analysis = tech_structured.get('llm_analysis', {})
+            selected = tech_structured.get('selected_indicators', [])
+            selection_reason = tech_structured.get('selection_reasoning', '')
             
-            if '<reason>' in text and '</reason>' in text:
-                start = text.find('<reason>') + 8
-                end = text.find('</reason>')
-                reason = text[start:end].strip()
-        except Exception as e:
-            text_upper = text.upper()
-            if 'YES' in text_upper and ('NEED' in text_upper or 'REQUIRE' in text_upper):
-                needs_detailed = True
-                lines = text.split('\n')
-                for line in lines:
-                    if 'reason' in line.lower() and len(line) > 20:
-                        reason = line.split(':', 1)[-1].strip()
-                        break
-        
-        return needs_detailed, reason
-    
-    def _prepare_technical_summary(self, data: Dict) -> str:
-        """Prepare technical summary for LLM"""
-        tech = data.get('technical', {})
-        tech_agent_insight = data.get('technical_insight')
-        
-        if tech_agent_insight:
-            return f"""Technical Analyst Report:
-{tech_agent_insight[:600]}
+            if llm_analysis:
+                summary = f"""=== TECHNICAL ANALYST (STRUCTURED) FOR {ticker} ===
+Selected Indicators: {', '.join(selected)}
+Selection Rationale: {selection_reason}
 
-Key Metrics:
-- RSI(14): {tech.get('momentum', {}).get('rsi_14', 50):.1f}
-- MACD: {'Bullish' if tech.get('trend', {}).get('macd', {}).get('histogram', 0) > 0 else 'Bearish'}
-- Volume: {tech.get('volume', {}).get('ratio', 1):.2f}x average"""
+{self._format_technical_structured_signals(llm_analysis)}"""
+            else:
+                # Dict but no llm_analysis key - fall back to raw metrics
+                summary = self._format_basic_technical_metrics(data, ticker)
+        elif isinstance(tech_structured, str) and len(tech_structured) > 50:
+            # Got raw string - use it directly
+            summary = f"""=== TECHNICAL ANALYST SIGNALS FOR {ticker} ===
+
+{tech_structured[:1500]}"""
         else:
-            return self._format_technical_data(tech)[:1000]
+            # No structured data - fall back to raw indicator formatting
+            summary = self._format_basic_technical_metrics(data, ticker)
+        
+        # Add detailed if provided
+        if detailed:
+            summary += f"""
+
+{'='*60}
+=== DETAILED TECHNICAL ANALYSIS FOR {ticker} ===
+{'='*60}
+
+{detailed[:2000]}
+
+[Full detailed analysis available for deep context]"""
+        
+        return summary
+    
+    def _format_technical_structured_signals(self, llm_analysis: Dict) -> str:
+        """Compact formatting of structured technical signals (mirrors fundamental)."""
+        trend = llm_analysis.get('trend_verdict', {})
+        momentum = llm_analysis.get('momentum_verdict', {})
+        volatility = llm_analysis.get('volatility_verdict', {})
+        volume = llm_analysis.get('volume_verdict', {})
+        levels = llm_analysis.get('key_levels', {})
+        outlook = llm_analysis.get('near_term_outlook', {})
+        
+        return f"""TREND: {trend.get('signal', 'N/A')} (Strength: {trend.get('strength', 'N/A')}, Confidence: {trend.get('confidence', 'N/A')})
+  -> {trend.get('reasoning', 'N/A')}
+
+MOMENTUM: {momentum.get('signal', 'N/A')} (Confidence: {momentum.get('confidence', 'N/A')})
+  -> {momentum.get('reasoning', 'N/A')}
+
+VOLATILITY: {volatility.get('signal', 'N/A')}
+  -> Bollinger Position: {volatility.get('bollinger_position', 'N/A')}
+  -> {volatility.get('implication', 'N/A')}
+
+VOLUME: {volume.get('signal', 'N/A')}
+  -> {volume.get('reasoning', 'N/A')}
+
+KEY LEVELS:
+  Support:    ${levels.get('support_1', 0):.2f} / ${levels.get('support_2', 0):.2f}
+  Resistance: ${levels.get('resistance_1', 0):.2f} / ${levels.get('resistance_2', 0):.2f}
+  Derivation: {levels.get('derivation', 'N/A')}
+
+PATTERN: {llm_analysis.get('pattern_detected', 'N/A')}
+
+NEAR-TERM OUTLOOK: {outlook.get('bias', 'N/A')} ({outlook.get('timeframe', 'N/A')})
+  Catalyst Level: {outlook.get('catalyst_level', 'N/A')}
+
+RISK FLAGS: {', '.join(llm_analysis.get('risk_flags', ['None identified']))}"""
+    
+    def _format_basic_technical_metrics(self, data: Dict, ticker: str) -> str:
+        """Format basic technical metrics as fallback."""
+        tech = data.get('technical', {})
+        price = tech.get('price', {})
+        ma = tech.get('moving_averages', {})
+        momentum = tech.get('momentum', {})
+        trend = tech.get('trend', {})
+        vol = tech.get('volatility', {})
+        volume = tech.get('volume', {})
+        macd = trend.get('macd', {})
+        
+        current = price.get('current', 0)
+        sma_20 = ma.get('sma_20', 0)
+        sma_50 = ma.get('sma_50', 0)
+        
+        return f"""=== BASIC TECHNICAL METRICS FOR {ticker} ===
+Price: ${current:.2f} | 1D: {price.get('change_1d', 0):+.2f}% | 5D: {price.get('change_5d', 0):+.2f}% | 20D: {price.get('change_20d', 0):+.2f}%
+Moving Avgs: SMA(20): ${sma_20:.2f} | SMA(50): ${sma_50:.2f} | Price {'Above' if current > sma_50 else 'Below'} SMA(50)
+Momentum: RSI(14): {momentum.get('rsi_14', 50):.1f} | {'Oversold' if momentum.get('rsi_14', 50) < 30 else 'Overbought' if momentum.get('rsi_14', 50) > 70 else 'Neutral'}
+Trend: MACD {'Bullish' if macd.get('histogram', 0) > 0 else 'Bearish'} | ADX: {trend.get('adx', 0):.1f}
+Volume: {volume.get('ratio', 1):.2f}x average | Trend: {volume.get('trend', 0):+.2%}
+Volatility: {vol.get('historical_vol', 0):.2%} annualized"""
     
     def _prepare_fundamental_summary(self, data: Dict, detailed: str = None) -> str:
         """
         Prepare fundamental summary for LLM.
-        
-        FIX #1: Now correctly handles both dict (parsed JSON) and string
-        (raw text) formats for fund_structured.
+        Handles both dict (parsed JSON) and string (raw text) formats.
         """
         ticker = data.get('ticker', 'UNKNOWN')
         fund_structured = data.get('fundamental_structured')
         
-        # Check if we got a properly parsed dict
         if isinstance(fund_structured, dict):
-            # Successfully parsed JSON - use structured signals
             llm_analysis = fund_structured.get('llm_analysis', {})
             
             if llm_analysis:
                 summary = f"""=== FUNDAMENTAL ANALYST (STRUCTURED) FOR {ticker} ===
 
-{self._format_structured_signals_compact(llm_analysis)}"""
+{self._format_fundamental_structured_signals(llm_analysis)}"""
             else:
-                # Dict but no llm_analysis key - fall back to basic metrics
                 summary = self._format_basic_fundamental_metrics(data, ticker)
         elif isinstance(fund_structured, str) and len(fund_structured) > 50:
-            # Got raw string from for_synthesis - use it directly
             summary = f"""=== FUNDAMENTAL ANALYST SIGNALS FOR {ticker} ===
 
 {fund_structured[:1500]}"""
         else:
-            # No structured data at all - fall back to basic metrics
             summary = self._format_basic_fundamental_metrics(data, ticker)
         
-        # Add detailed if provided
         if detailed:
             summary += f"""
 
@@ -1115,8 +1045,8 @@ Growth: Rev YoY: {growth.get('revenue_growth_yoy', 0):.1f}% | Earnings YoY: {gro
 Quality: Altman Z: {qual.get('altman_z_score', 0):.2f} ({qual.get('altman_z_interpretation', 'N/A')}) | Piotroski F: {qual.get('piotroski_f_score', 0)}/9
 Health: D/E: {lev.get('debt_to_equity', 0):.2f} | Current Ratio: {liq.get('current_ratio', 0):.2f}"""
     
-    def _format_structured_signals_compact(self, llm_analysis: Dict) -> str:
-        """Compact formatting of structured signals"""
+    def _format_fundamental_structured_signals(self, llm_analysis: Dict) -> str:
+        """Compact formatting of structured fundamental signals."""
         val = llm_analysis.get('valuation_verdict', {})
         qual = llm_analysis.get('quality_verdict', {})
         growth = llm_analysis.get('growth_verdict', {})
@@ -1142,51 +1072,6 @@ RISKS: {', '.join(llm_analysis.get('key_risks', [])[:3])}
 THESIS:
 Bull: {llm_analysis.get('investment_thesis', {}).get('bull_case', 'N/A')}
 Bear: {llm_analysis.get('investment_thesis', {}).get('bear_case', 'N/A')}"""
-    
-    def _format_technical_data(self, tech: Dict[str, Any]) -> str:
-        """Format technical data for LLM"""
-        if not tech:
-            return "No technical data available"
-        
-        price = tech.get('price', {})
-        ma = tech.get('moving_averages', {})
-        momentum = tech.get('momentum', {})
-        trend = tech.get('trend', {})
-        vol = tech.get('volatility', {})
-        volume = tech.get('volume', {})
-        
-        macd = trend.get('macd', {})
-        bb = vol.get('bollinger', {})
-        
-        return f"""
-=== TECHNICAL INDICATORS ===
-
-PRICE ACTION:
-- Current Price: ${price.get('current', 0):.2f}
-- 1-Day Change: {price.get('change_1d', 0):+.2f}%
-- 5-Day Change: {price.get('change_5d', 0):+.2f}%
-- 20-Day Change: {price.get('change_20d', 0):+.2f}%
-
-MOVING AVERAGES:
-- SMA(20): ${ma.get('sma_20', 0):.2f}
-- SMA(50): ${ma.get('sma_50', 0):.2f}
-- SMA(200): ${ma.get('sma_200', 0):.2f if ma.get('sma_200') else 'N/A'}
-- Price vs SMA(20): {'Above' if price.get('current', 0) > ma.get('sma_20', 0) else 'Below'}
-- Price vs SMA(50): {'Above' if price.get('current', 0) > ma.get('sma_50', 0) else 'Below'}
-
-MOMENTUM:
-- RSI(14): {momentum.get('rsi_14', 50):.2f}
-- RSI Signal: {'Oversold' if momentum.get('rsi_14', 50) < 30 else 'Overbought' if momentum.get('rsi_14', 50) > 70 else 'Neutral'}
-
-TREND:
-- MACD Histogram: {macd.get('histogram', 0):.4f}
-- MACD Signal: {'Bullish' if macd.get('histogram', 0) > 0 else 'Bearish'}
-- ADX: {trend.get('adx', 0):.2f}
-
-VOLUME:
-- Volume Ratio: {volume.get('ratio', 0):.2f}x average
-- Volume Trend: {volume.get('trend', 0):+.2%}
-"""
     
     def _format_sentiment_data(self, sent: Dict[str, Any]) -> str:
         """Format sentiment data for LLM"""
@@ -1214,27 +1099,239 @@ RECENT NEWS ({len(articles)} articles):
 """
     
     # =========================================================================
-    # FIX #3: Build prompts as plain strings instead of using .format()
-    #
-    # The old approach used PromptTemplate with double-brace {{ticker}} for
-    # two-stage formatting. This was fragile because:
-    # - The first .format() resolved {detailed_status} etc.
-    # - The second .format() resolved {ticker} etc.
-    # - If any pre-formatted string contained curly braces (common in
-    #   financial data like JSON), it would break the second pass.
-    #
-    # New approach: Build the complete prompt string with f-strings and
-    # pass it directly to the LLM. No template formatting needed.
+    # LLM Analysis Generation (Two-Stage with Unified Assessment)
+    # =========================================================================
+    
+    def generate_llm_analysis(self, data: Dict[str, Any], scores: Dict[str, Any], 
+                             targets: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Two-stage synthesis with unified self-assessment for BOTH domains.
+        
+        Stage 1: LLM evaluates whether it needs detailed analysis for 
+                 technical, fundamental, or both.
+        Stage 2: Conditional fetch + final synthesis.
+        """
+        
+        ticker = data['ticker']
+        stock_info = data.get('stock_info', {})
+        company_name = stock_info.get('name', ticker)
+        sector = stock_info.get('sector', 'Unknown')
+        industry = stock_info.get('industry', 'Unknown')
+        
+        # Prepare summaries from structured signals
+        tech_summary = self._prepare_technical_summary(data)
+        fund_summary = self._prepare_fundamental_summary(data)
+        sent_summary = self._format_sentiment_data(data.get('sentiment', {}))[:800]
+        
+        scores_text = f"""Technical: {scores['technical']['score']:.1f}/100
+Fundamental: {scores['fundamental']['score']:.1f}/100
+Sentiment: {scores['sentiment']['score']:.1f}/100
+Overall: {scores['overall']:.1f}/100"""
+        
+        tech = data.get('technical', {})
+        volatility = tech.get('volatility', {}).get('historical_vol', 0.3)
+        options_strategy, options_rationale = self.scorer.determine_options_strategy(
+            scores['signal'], volatility, sentiment_score=scores['sentiment']['score']
+        )
+        
+        current_price = targets['current']
+        
+        # =====================================================================
+        # STAGE 1: UNIFIED ASSESSMENT — Technical AND Fundamental
+        # =====================================================================
+        
+        assessment_prompt = self._build_assessment_prompt(
+            ticker=ticker,
+            company_name=company_name,
+            sector=sector,
+            industry=industry,
+            current_price=current_price,
+            technical_summary=tech_summary,
+            fundamental_summary=fund_summary,
+            sentiment_summary=sent_summary,
+            scores_summary=scores_text,
+            signal=scores['signal'].value,
+            confidence=scores['confidence']
+        )
+        
+        assessment_response = self.llm.invoke(assessment_prompt)
+        
+        if isinstance(assessment_response.content, str):
+            assessment_text = assessment_response.content
+        elif isinstance(assessment_response.content, list):
+            text_parts = [item for item in assessment_response.content if isinstance(item, str)]
+            assessment_text = '\n'.join(text_parts) if text_parts else str(assessment_response.content)
+        else:
+            assessment_text = str(assessment_response.content)
+        
+        needs_tech_detailed, tech_reason, needs_fund_detailed, fund_reason = \
+            self._parse_unified_assessment(assessment_text)
+        
+        # =====================================================================
+        # CONDITIONAL FETCH: Get detailed for whichever domains need it
+        # =====================================================================
+        
+        tech_detailed = None
+        fund_detailed = None
+        
+        if needs_tech_detailed:
+            print(f"\n🔍 {ticker}: LLM requesting detailed TECHNICAL analysis")
+            print(f"   Reason: {tech_reason}\n")
+            tech_detailed = self._fetch_detailed_with_validation("technical", ticker)
+            if tech_detailed:
+                tech_summary = self._prepare_technical_summary(data, detailed=tech_detailed)
+            else:
+                tech_reason = "Requested but validation failed after retries"
+        
+        if needs_fund_detailed:
+            print(f"\n🔍 {ticker}: LLM requesting detailed FUNDAMENTAL analysis")
+            print(f"   Reason: {fund_reason}\n")
+            fund_detailed = self._fetch_detailed_with_validation("fundamental", ticker)
+            if fund_detailed:
+                fund_summary = self._prepare_fundamental_summary(data, detailed=fund_detailed)
+            else:
+                fund_reason = "Requested but validation failed after retries"
+        
+        # =====================================================================
+        # STAGE 2: FINAL SYNTHESIS
+        # =====================================================================
+        
+        # Build detail status text
+        detail_lines = []
+        if tech_detailed:
+            detail_lines.append(f"TECHNICAL: DETAILED ANALYSIS FETCHED — {tech_reason}")
+        else:
+            detail_lines.append("TECHNICAL: Structured signals sufficient")
+        if fund_detailed:
+            detail_lines.append(f"FUNDAMENTAL: DETAILED ANALYSIS FETCHED — {fund_reason}")
+        else:
+            detail_lines.append("FUNDAMENTAL: Structured signals sufficient")
+        detail_fetch_info = "\n".join(detail_lines)
+        
+        additional_context_parts = []
+        if tech_detailed:
+            additional_context_parts.append(
+                f"- How does the detailed technical context clarify {ticker}'s price action and key levels?"
+            )
+        if fund_detailed:
+            additional_context_parts.append(
+                f"- How does the detailed fundamental context resolve ambiguities about {ticker}'s valuation/quality?"
+            )
+        additional_context = "\n".join(additional_context_parts)
+        
+        synthesis_prompt = self._build_synthesis_prompt(
+            ticker=ticker,
+            company_name=company_name,
+            sector=sector,
+            industry=industry,
+            current_price=current_price,
+            technical_summary=tech_summary,
+            fundamental_summary=fund_summary,
+            sentiment_summary=sent_summary,
+            scores_summary=scores_text,
+            signal=scores['signal'].value,
+            confidence=scores['confidence'],
+            price_target_low=targets['low'],
+            price_target_mid=targets['mid'],
+            price_target_high=targets['high'],
+            target_timeframe=targets['timeframe'],
+            options_strategy=options_strategy.value,
+            detail_fetch_info=detail_fetch_info,
+            additional_context=additional_context
+        )
+        
+        synthesis_response = self.llm.invoke(synthesis_prompt)
+        
+        if isinstance(synthesis_response.content, str):
+            analysis_text = synthesis_response.content
+        elif isinstance(synthesis_response.content, list):
+            text_parts = [item for item in synthesis_response.content if isinstance(item, str)]
+            analysis_text = '\n'.join(text_parts) if text_parts else str(synthesis_response.content)
+        else:
+            analysis_text = str(synthesis_response.content)
+        
+        # Final validation
+        if not validate_ticker_in_text(analysis_text, ticker, min_mentions=3):
+            print(f"⚠️  WARNING: Final synthesis may not be about {ticker}!")
+            analysis_text = (
+                f"[NOTE: This analysis is for {ticker} ({company_name})]\n\n"
+                + analysis_text
+            )
+        
+        return {
+            'full_analysis': analysis_text,
+            'options_strategy': options_strategy,
+            'options_rationale': options_rationale,
+            'used_detailed_technical': bool(tech_detailed),
+            'used_detailed_fundamental': bool(fund_detailed),
+            'tech_detail_reason': tech_reason if tech_detailed else None,
+            'fund_detail_reason': fund_reason if fund_detailed else None,
+            'llm_requested_tech_detailed': needs_tech_detailed,
+            'llm_requested_fund_detailed': needs_fund_detailed,
+        }
+    
+    def _parse_unified_assessment(self, text: str) -> Tuple[bool, str, bool, str]:
+        """
+        Parse the unified assessment response.
+        Returns: (needs_tech_detailed, tech_reason, needs_fund_detailed, fund_reason)
+        """
+        needs_tech = False
+        tech_reason = "Structured signals sufficient"
+        needs_fund = False
+        fund_reason = "Structured signals sufficient"
+        
+        try:
+            # Parse technical decision
+            if '<technical_decision>' in text and '</technical_decision>' in text:
+                start = text.find('<technical_decision>') + len('<technical_decision>')
+                end = text.find('</technical_decision>')
+                decision = text[start:end].strip().upper()
+                needs_tech = decision == 'YES'
+            
+            if '<technical_reason>' in text and '</technical_reason>' in text:
+                start = text.find('<technical_reason>') + len('<technical_reason>')
+                end = text.find('</technical_reason>')
+                tech_reason = text[start:end].strip()
+            
+            # Parse fundamental decision
+            if '<fundamental_decision>' in text and '</fundamental_decision>' in text:
+                start = text.find('<fundamental_decision>') + len('<fundamental_decision>')
+                end = text.find('</fundamental_decision>')
+                decision = text[start:end].strip().upper()
+                needs_fund = decision == 'YES'
+            
+            if '<fundamental_reason>' in text and '</fundamental_reason>' in text:
+                start = text.find('<fundamental_reason>') + len('<fundamental_reason>')
+                end = text.find('</fundamental_reason>')
+                fund_reason = text[start:end].strip()
+                
+        except Exception as e:
+            # Fallback: look for keywords
+            text_upper = text.upper()
+            if 'TECHNICAL' in text_upper and 'YES' in text_upper and 'NEED' in text_upper:
+                needs_tech = True
+                tech_reason = "Detected from unstructured assessment"
+            if 'FUNDAMENTAL' in text_upper and 'YES' in text_upper and 'NEED' in text_upper:
+                needs_fund = True
+                fund_reason = "Detected from unstructured assessment"
+        
+        return needs_tech, tech_reason, needs_fund, fund_reason
+    
+    # =========================================================================
+    # Prompt Builders (plain f-strings to avoid template variable conflicts)
     # =========================================================================
     
     def _build_assessment_prompt(self, *, ticker, company_name, sector, industry,
                                   current_price, technical_summary, fundamental_summary,
                                   sentiment_summary, scores_summary, signal, confidence) -> str:
-        """Build the Stage 1 assessment prompt as a plain string."""
+        """
+        Build the unified assessment prompt.
+        UPDATED: Now evaluates BOTH technical and fundamental detail needs.
+        """
         
         return f"""You are the LEAD INVESTMENT ANALYST preparing to synthesize a recommendation for {ticker}.
 
-You have received inputs from three specialist analysts. Your job is to FIRST assess whether you have sufficient information, THEN (in a separate step) you'll create the full synthesis.
+You have received STRUCTURED SIGNALS from both specialist analysts. Your job is to assess whether you need DETAILED analysis from either or both domains before creating the final synthesis.
 
 === STOCK INFORMATION ===
 Ticker: {ticker}
@@ -1242,12 +1339,12 @@ Company: {company_name}
 Sector: {sector} | Industry: {industry}
 Current Price: ${current_price}
 
-=== INPUTS RECEIVED ===
+=== SPECIALIST INPUTS (STRUCTURED SIGNALS) ===
 
 TECHNICAL ANALYST:
 {technical_summary}
 
-FUNDAMENTAL ANALYST (STRUCTURED SIGNALS):
+FUNDAMENTAL ANALYST:
 {fundamental_summary}
 
 SENTIMENT ANALYST:
@@ -1260,29 +1357,35 @@ Confidence: {confidence}%
 
 === YOUR ASSESSMENT TASK ===
 
-Before attempting to synthesize a recommendation, evaluate:
+Evaluate SEPARATELY whether you need detailed analysis for each domain.
 
-**Can you make a CLEAR, CONFIDENT investment recommendation with the information above?**
+**TECHNICAL — Do you need detailed technical analysis?**
 
-Consider:
-1. Are fundamental signals internally consistent?
-2. Do fundamental signals align or conflict with technical/sentiment?
-3. Are there edge cases or ambiguities that need deeper fundamental context?
-4. Is this a high-stakes decision (strong buy/sell) where you need to be certain?
-5. Would detailed fundamental analysis (600-800 words covering valuation, quality, growth in depth) help resolve any uncertainties?
+NEED DETAILED TECHNICAL if:
+- Technical signals conflict internally (e.g., trend bullish but momentum overbought with bearish divergence)
+- Key levels are unclear or the pattern detected is ambiguous
+- Cross-domain conflict: technicals disagree significantly with fundamentals/sentiment
+- High-volatility stock where price action nuance matters (biotech, meme stocks, recent IPOs)
+- Near a critical inflection point (testing major support/resistance, SMA crossover imminent)
 
-**Decision Criteria:**
+DON'T NEED DETAILED TECHNICAL if:
+- Technical signals are clear and internally consistent
+- This is a hold/neutral situation where technical timing is less critical
+- Fundamentals are the primary driver (e.g., value plays, dividend stocks)
+- Technical structured signals already provide sufficient key levels and pattern context
 
-NEED DETAILED if:
+**FUNDAMENTAL — Do you need detailed fundamental analysis?**
+
+NEED DETAILED FUNDAMENTAL if:
 - Fundamental signals conflict internally (e.g., "High Quality" + "Declining Growth" + "Undervalued")
-- Cross-domain conflicts (e.g., fundamentals bullish but technicals broken, sentiment negative)
+- Cross-domain conflicts (fundamentals bullish but technicals broken, sentiment negative)
 - Edge case sector/situation (biotech, utilities with unusual metrics, distressed companies)
-- High conviction signal (score >75 or <25) but want to be absolutely certain
+- High conviction signal (score >75 or <25) where you want to be certain
 - Multiple low-confidence fundamental signals
 
-DON'T NEED DETAILED if:
+DON'T NEED DETAILED FUNDAMENTAL if:
 - Signals are clear and aligned across all three domains
-- This is a neutral/hold situation (structured is sufficient for "wait and see")
+- Neutral/hold situation (structured is sufficient for "wait and see")
 - Technical/sentiment so strong they override fundamental nuances
 - Fundamental signals are clear and high-confidence
 
@@ -1290,17 +1393,14 @@ DON'T NEED DETAILED if:
 
 Respond in EXACTLY this format:
 
-<decision>YES</decision>
-<reason>One sentence explaining why you need detailed fundamental analysis for {ticker}</reason>
+<technical_decision>YES or NO</technical_decision>
+<technical_reason>One sentence explaining why for {ticker}</technical_reason>
 
-OR
-
-<decision>NO</decision>
-<reason>One sentence explaining why structured signals are sufficient for {ticker}</reason>
+<fundamental_decision>YES or NO</fundamental_decision>
+<fundamental_reason>One sentence explaining why for {ticker}</fundamental_reason>
 
 CRITICAL: You are assessing {ticker} ({company_name}). Do not reference any other stock.
-
-Then STOP. Do not provide the full synthesis yet - that comes in the next step.
+Then STOP. Do not provide the full synthesis yet.
 
 Your assessment:"""
     
@@ -1309,20 +1409,13 @@ Your assessment:"""
                                  sentiment_summary, scores_summary, signal, confidence,
                                  price_target_low, price_target_mid, price_target_high,
                                  target_timeframe, options_strategy,
-                                 detailed_status, detail_fetch_info, additional_context) -> str:
-        """
-        Build the Stage 2 synthesis prompt as a plain string.
-        
-        FIX #3: This replaces the old PromptTemplate approach that used
-        double-brace escaping and two-stage .format() calls.
-        """
+                                 detail_fetch_info, additional_context) -> str:
+        """Build the final synthesis prompt as a plain string."""
         
         return f"""You are the LEAD INVESTMENT ANALYST creating a final investment recommendation.
 
 CRITICAL: You are analyzing {ticker} ({company_name}). Do NOT confuse this with any other stock.
 You must ONLY discuss {ticker}. If you find yourself writing about a different company, STOP and correct yourself.
-
-You have already assessed your information needs and {detailed_status}.
 
 === STOCK INFORMATION ===
 **ANALYZING: {ticker} - {company_name}**
@@ -1349,12 +1442,13 @@ Price Targets ({target_timeframe}): ${price_target_low:.2f} / ${price_target_mid
 Options: {options_strategy}
 
 ============================================================
+DETAIL FETCH STATUS:
 {detail_fetch_info}
 ============================================================
 
 === YOUR SYNTHESIS TASK ===
 
-**REMINDER: You are analyzing {ticker} ({company_name}) - stay focused on THIS stock only.**
+**REMINDER: You are analyzing {ticker} ({company_name}) — stay focused on THIS stock only.**
 
 Create a comprehensive investment recommendation integrating all inputs FOR {ticker}.
 
@@ -1375,20 +1469,20 @@ Create a comprehensive investment recommendation integrating all inputs FOR {tic
 EQUITY POSITION:
 - Action: [Buy/Add/Hold/Reduce/Sell + conviction level]
 - Position Size: [% based on confidence: 1-2% low confidence, 3-5% medium, 5-7% high]
-- Entry Strategy: $XX.XX [specific technical level]
-- Stop Loss: $XX.XX [below support + fundamental invalidation]
+- Entry Strategy: $XX.XX [specific technical level from structured signals]
+- Stop Loss: $XX.XX [below support from technical key levels]
 - Profit Target: $XX.XX [resistance + fundamental upside]
 - Time Horizon: [days/weeks/months based on catalysts]
 
 OPTIONS STRATEGY:
 - Recommended: {options_strategy}
-- Strike: [specific strike based on targets]
+- Strike: [specific strike based on key levels and targets]
 - Expiration: [date based on catalyst timing]
 - Risk/Reward: [bull/base/bear scenarios with expected P&L]
 
 **4. MONITORING FRAMEWORK FOR {ticker}**
 Three specific triggers to watch for {ticker}:
-- Technical: "If {ticker} price breaks $XX..."
+- Technical: "If {ticker} price breaks $XX..." [use key levels from structured signals]
 - Fundamental: "Watch {ticker} quarterly earnings for..."
 - Sentiment: "If negative news emerges about {ticker}..."
 
@@ -1398,14 +1492,18 @@ Bear Case (3 bullets): Each showing risks across domains for {ticker}
 
 === GUIDELINES ===
 - Be specific with prices, dates, percentages
-- Own your synthesis - don't just summarize
+- Use key support/resistance levels from technical structured signals for entry/exit points
+- Own your synthesis — don't just summarize each domain separately
 - Show reasoning when specialists disagree
 - Action-oriented: help investor make decisions
 - 800-1000 words total
 - **CRITICAL: Your entire analysis must be about {ticker} ({company_name}). Do not analyze any other stock.**
-- **VERIFY: Before submitting, confirm every company reference is to {ticker} ({company_name}).**
 
 Begin your analysis of {ticker}:"""
+    
+    # =========================================================================
+    # Public API
+    # =========================================================================
     
     def analyze(self, ticker: str) -> str:
         """Perform complete analysis and return formatted report."""
@@ -1422,6 +1520,18 @@ Begin your analysis of {ticker}:"""
         
         print("Generating comprehensive analysis...")
         llm_result = self.generate_llm_analysis(data, scores, targets)
+        
+        # Build detail status for header
+        detail_lines = []
+        if llm_result['used_detailed_technical']:
+            detail_lines.append(f"Technical: FETCHED — {llm_result['tech_detail_reason']}")
+        else:
+            detail_lines.append("Technical: Structured signals sufficient")
+        if llm_result['used_detailed_fundamental']:
+            detail_lines.append(f"Fundamental: FETCHED — {llm_result['fund_detail_reason']}")
+        else:
+            detail_lines.append("Fundamental: Structured signals sufficient")
+        detail_status = "\n".join(detail_lines)
         
         header = f"""
 {'='*80}
@@ -1451,8 +1561,8 @@ Price Targets ({targets['timeframe']}):
   High:    ${targets['high']:.2f} ({((targets['high']/targets['current'])-1)*100:+.1f}%)
 
 {'='*80}
-DETAILED FUNDAMENTAL ANALYSIS: {'USED' if llm_result['used_detailed_fundamental'] else 'NOT NEEDED'}
-{f"Reason: {llm_result['detail_fetch_reason']}" if llm_result['used_detailed_fundamental'] else "Structured signals were sufficient"}
+DETAILED ANALYSIS STATUS:
+{detail_status}
 {'='*80}
 
 DETAILED ANALYSIS:
