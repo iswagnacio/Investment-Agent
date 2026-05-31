@@ -58,6 +58,12 @@ try:
 except ImportError:
     HAS_FUNDAMENTAL_AGENT = False
 
+try:
+    from sentiment_agent import SentimentAnalystAgent
+    HAS_SENTIMENT_AGENT = True
+except ImportError:
+    HAS_SENTIMENT_AGENT = False
+
 load_dotenv()
 
 
@@ -417,30 +423,88 @@ class ScoreCalculator:
         return round(total_score, 1), scores
     
     @staticmethod
-    def calculate_sentiment_score(news_data: Dict[str, Any]) -> Tuple[float, Dict[str, Any]]:
+    def calculate_sentiment_score(news_data: Dict[str, Any], 
+                                   structured: Dict[str, Any] = None) -> Tuple[float, Dict[str, Any]]:
         """
         Calculate sentiment score (0-100) from news/sentiment data.
-        Returns score and component breakdown.
+        
+        UPDATED: Incorporates LLM-derived structured signals when available.
+        This ensures the 20% sentiment weight is meaningful even without
+        Alpha Vantage pre-computed scores.
+        
+        Priority:
+        1. LLM-derived tone (from sentiment_agent) — most reliable
+        2. Alpha Vantage pre-computed scores — numeric but limited availability  
+        3. Article count/recency heuristics — always available fallback
         """
         scores = {}
         
         articles = news_data.get('company_news', {}).get('articles', [])
         
-        if not articles:
-            return 50.0, {'news_sentiment': 50, 'news_volume': 50, 'recency': 50}
+        if not articles and not structured:
+            return 50.0, {'news_sentiment': 50, 'news_volume': 50, 'recency': 50, 'llm_tone': 50}
         
-        # Calculate average sentiment from articles with sentiment hints
+        # =====================================================================
+        # LLM-derived tone score (highest priority when available)
+        # =====================================================================
+        llm_tone_score = None
+        if isinstance(structured, dict):
+            llm_analysis = structured.get('llm_analysis', {})
+            if llm_analysis:
+                # Map overall_tone to score
+                tone = llm_analysis.get('overall_tone', {})
+                tone_signal = tone.get('signal', 'Neutral').lower()
+                tone_confidence = tone.get('confidence', 'Low').lower()
+                
+                tone_map = {'bullish': 75, 'neutral': 50, 'mixed': 50, 'bearish': 25}
+                base_tone = tone_map.get(tone_signal, 50)
+                
+                # Adjust by confidence
+                confidence_multiplier = {'high': 1.0, 'medium': 0.7, 'low': 0.4}
+                conf = confidence_multiplier.get(tone_confidence, 0.5)
+                
+                # Move away from 50 based on confidence
+                llm_tone_score = 50 + (base_tone - 50) * conf
+                
+                # Adjust by tone direction
+                direction = llm_analysis.get('tone_direction', {}).get('signal', 'Stable').lower()
+                if direction == 'improving':
+                    llm_tone_score = min(100, llm_tone_score + 8)
+                elif direction == 'deteriorating':
+                    llm_tone_score = max(0, llm_tone_score - 8)
+                
+                # Controversy penalty
+                controversy = llm_analysis.get('controversy_flag', {})
+                if controversy.get('detected', False):
+                    llm_tone_score = max(0, llm_tone_score - 12)
+                
+                # Catalyst bonus/penalty
+                catalyst = llm_analysis.get('catalyst_detected', {})
+                if catalyst.get('detected', False):
+                    impact = catalyst.get('expected_impact', '').lower()
+                    if 'positive' in impact or 'bullish' in impact:
+                        llm_tone_score = min(100, llm_tone_score + 5)
+                    elif 'negative' in impact or 'bearish' in impact:
+                        llm_tone_score = max(0, llm_tone_score - 5)
+        
+        scores['llm_tone'] = max(0, min(100, llm_tone_score)) if llm_tone_score is not None else 50
+        
+        # =====================================================================
+        # Pre-computed sentiment scores (Alpha Vantage, when available)
+        # =====================================================================
         sentiment_values = [a.sentiment_hint for a in articles if a.sentiment_hint is not None]
         
         if sentiment_values:
             avg_sentiment = sum(sentiment_values) / len(sentiment_values)
-            news_sentiment = (avg_sentiment + 1) * 50
+            news_sentiment = (avg_sentiment + 1) * 50  # Map [-1, 1] to [0, 100]
         else:
             news_sentiment = 50
         
         scores['news_sentiment'] = max(0, min(100, news_sentiment))
         
-        # News volume score
+        # =====================================================================
+        # Volume and recency (heuristic, always available)
+        # =====================================================================
         num_articles = len(articles)
         if num_articles > 20:
             volume_score = 70
@@ -452,7 +516,6 @@ class ScoreCalculator:
             volume_score = 40
         scores['news_volume'] = volume_score
         
-        # Recency score
         recent_count = 0
         for a in articles:
             try:
@@ -472,7 +535,22 @@ class ScoreCalculator:
             recency_score = 50
         scores['recency'] = recency_score
         
-        weights = {'news_sentiment': 0.6, 'news_volume': 0.2, 'recency': 0.2}
+        # =====================================================================
+        # Weighted total — shift weights based on available data
+        # =====================================================================
+        if llm_tone_score is not None and sentiment_values:
+            # Best case: LLM + pre-computed + heuristics
+            weights = {'llm_tone': 0.45, 'news_sentiment': 0.25, 'news_volume': 0.15, 'recency': 0.15}
+        elif llm_tone_score is not None:
+            # LLM available but no pre-computed scores (most common)
+            weights = {'llm_tone': 0.55, 'news_sentiment': 0.05, 'news_volume': 0.20, 'recency': 0.20}
+        elif sentiment_values:
+            # Pre-computed available but no LLM (sentiment_agent not loaded)
+            weights = {'llm_tone': 0.05, 'news_sentiment': 0.55, 'news_volume': 0.20, 'recency': 0.20}
+        else:
+            # Neither available — heuristic only
+            weights = {'llm_tone': 0.10, 'news_sentiment': 0.10, 'news_volume': 0.40, 'recency': 0.40}
+        
         total_score = sum(scores[k] * weights[k] for k in weights)
         
         return round(total_score, 1), scores
@@ -613,6 +691,7 @@ class GeneralAnalystAgent:
         self.use_specialist_agents = use_specialist_agents
         self.technical_agent = None
         self.fundamental_agent = None
+        self.sentiment_agent = None
         
         if use_specialist_agents:
             if HAS_TECHNICAL_AGENT:
@@ -626,6 +705,12 @@ class GeneralAnalystAgent:
                     self.fundamental_agent = FundamentalAnalystAgent(model=model)
                 except Exception as e:
                     print(f"Warning: Could not initialize FundamentalAnalystAgent: {e}")
+            
+            if HAS_SENTIMENT_AGENT:
+                try:
+                    self.sentiment_agent = SentimentAnalystAgent(model=model)
+                except Exception as e:
+                    print(f"Warning: Could not initialize SentimentAnalystAgent: {e}")
         
         self.llm = ChatAnthropic(model_name=model, temperature=0, max_tokens=4096)
     
@@ -726,18 +811,50 @@ class GeneralAnalystAgent:
         data['fundamental_detailed'] = None
         
         # =====================================================================
-        # Sentiment data
+        # Sentiment data (raw, for scoring)
         # =====================================================================
         try:
             company_name = data.get('stock_info', {}).get('name', ticker)
             industry = data.get('stock_info', {}).get('industry', '')
-            data['sentiment'] = self.sentiment.fetch_all(
-                ticker, company_name, industry, 
-                max_company_news=25, max_industry_news=10
-            )
+            
+            if self.use_specialist_agents and self.sentiment_agent:
+                # Use sentiment agent's get_raw_data to avoid double-fetching
+                data['sentiment'] = self.sentiment_agent.get_raw_data(
+                    ticker, company_name, industry
+                )
+            else:
+                data['sentiment'] = self.sentiment.fetch_all(
+                    ticker, company_name, industry, 
+                    max_company_news=25, max_industry_news=10
+                )
         except Exception as e:
             data['sentiment'] = {}
             data['sentiment_error'] = str(e)
+        
+        # =====================================================================
+        # Sentiment agent structured signals
+        # =====================================================================
+        if self.use_specialist_agents and self.sentiment_agent:
+            try:
+                raw_response = self.sentiment_agent.analyze(
+                    ticker, 
+                    company_name=data.get('stock_info', {}).get('name'),
+                    industry=data.get('stock_info', {}).get('industry')
+                )
+                
+                parsed = extract_json_from_text(raw_response)
+                if parsed and isinstance(parsed, dict):
+                    data['sentiment_structured'] = parsed
+                    print(f"   ✓ Parsed structured sentiment signals for {ticker}")
+                else:
+                    data['sentiment_structured'] = raw_response
+                    print(f"   ⚠ Could not parse JSON from sentiment analysis, using raw text")
+                    
+            except Exception as e:
+                data['sentiment_structured'] = None
+                data['sentiment_structured_error'] = str(e)
+        else:
+            data['sentiment_structured'] = None
         
         return data
     
@@ -758,7 +875,9 @@ class GeneralAnalystAgent:
             scores['fundamental'] = {'score': 50.0, 'breakdown': {}}
         
         if data.get('sentiment'):
-            sent_score, sent_breakdown = self.scorer.calculate_sentiment_score(data['sentiment'])
+            sent_score, sent_breakdown = self.scorer.calculate_sentiment_score(
+                data['sentiment'], data.get('sentiment_structured')
+            )
             scores['sentiment'] = {'score': sent_score, 'breakdown': sent_breakdown}
         else:
             scores['sentiment'] = {'score': 50.0, 'breakdown': {}}
@@ -1073,10 +1192,89 @@ THESIS:
 Bull: {llm_analysis.get('investment_thesis', {}).get('bull_case', 'N/A')}
 Bear: {llm_analysis.get('investment_thesis', {}).get('bear_case', 'N/A')}"""
     
-    def _format_sentiment_data(self, sent: Dict[str, Any]) -> str:
-        """Format sentiment data for LLM"""
+    def _prepare_sentiment_summary(self, data: Dict) -> str:
+        """
+        Prepare sentiment summary for LLM.
+        Mirrors _prepare_technical_summary and _prepare_fundamental_summary pattern.
+        Uses structured signals from sentiment agent when available,
+        falls back to raw headline formatting.
+        """
+        ticker = data.get('ticker', 'UNKNOWN')
+        sent_structured = data.get('sentiment_structured')
+        
+        # Check if we got a properly parsed dict from sentiment agent
+        if isinstance(sent_structured, dict):
+            llm_analysis = sent_structured.get('llm_analysis', {})
+            
+            if llm_analysis:
+                summary = f"""=== SENTIMENT ANALYST (STRUCTURED) FOR {ticker} ===
+
+{self._format_sentiment_structured_signals(llm_analysis)}"""
+            else:
+                # Dict but no llm_analysis key - fall back to raw headlines
+                summary = self._format_basic_sentiment_data(data, ticker)
+        elif isinstance(sent_structured, str) and len(sent_structured) > 50:
+            # Got raw string - use it directly
+            summary = f"""=== SENTIMENT ANALYST SIGNALS FOR {ticker} ===
+
+{sent_structured[:1500]}"""
+        else:
+            # No structured data - fall back to raw headline formatting
+            summary = self._format_basic_sentiment_data(data, ticker)
+        
+        return summary
+    
+    def _format_sentiment_structured_signals(self, llm_analysis: Dict) -> str:
+        """Compact formatting of structured sentiment signals (mirrors other domains)."""
+        tone = llm_analysis.get('overall_tone', {})
+        direction = llm_analysis.get('tone_direction', {})
+        concentration = llm_analysis.get('news_concentration', {})
+        controversy = llm_analysis.get('controversy_flag', {})
+        catalyst = llm_analysis.get('catalyst_detected', {})
+        industry_ctx = llm_analysis.get('industry_context', {})
+        
+        # Format key events
+        events = llm_analysis.get('key_events', [])
+        events_text = "None identified"
+        if events:
+            event_lines = []
+            for e in events[:5]:
+                event_lines.append(
+                    f"  - {e.get('event', 'N/A')} "
+                    f"[{e.get('impact', 'N/A')}, {e.get('materiality', 'N/A')} materiality]"
+                )
+            events_text = "\n".join(event_lines)
+        
+        themes = llm_analysis.get('key_themes', [])
+        
+        return f"""OVERALL TONE: {tone.get('signal', 'N/A')} (Confidence: {tone.get('confidence', 'N/A')})
+  -> {tone.get('reasoning', 'N/A')}
+
+TONE DIRECTION: {direction.get('signal', 'N/A')}
+  -> {direction.get('reasoning', 'N/A')}
+
+KEY EVENTS (deduplicated):
+{events_text}
+
+KEY THEMES: {', '.join(themes) if themes else 'None identified'}
+
+NEWS CONCENTRATION: {concentration.get('signal', 'N/A')}
+  -> {concentration.get('reasoning', 'N/A')}
+
+CONTROVERSY: {'⚠ DETECTED — ' + controversy.get('description', '') if controversy.get('detected') else 'None detected'}
+
+CATALYST: {'DETECTED — ' + catalyst.get('description', '') + ' (Impact: ' + catalyst.get('expected_impact', 'Unknown') + ')' if catalyst.get('detected') else 'None detected'}
+
+INDUSTRY CONTEXT: {industry_ctx.get('signal', 'N/A')}
+  -> {industry_ctx.get('reasoning', 'N/A')}
+
+RISK SIGNALS: {', '.join(llm_analysis.get('risk_signals', ['None identified']))}"""
+    
+    def _format_basic_sentiment_data(self, data: Dict, ticker: str) -> str:
+        """Format basic sentiment data as fallback (raw headlines)."""
+        sent = data.get('sentiment', {})
         if not sent:
-            return "No sentiment data available"
+            return f"=== BASIC SENTIMENT DATA FOR {ticker} ===\nNo sentiment data available"
         
         summary = sent.get('summary', {})
         company_news = sent.get('company_news', {})
@@ -1084,19 +1282,15 @@ Bear: {llm_analysis.get('investment_thesis', {}).get('bear_case', 'N/A')}"""
         
         headlines = []
         for article in articles[:10]:
-            sentiment_str = f" [Sentiment: {article.sentiment_hint:.2f}]" if article.sentiment_hint else ""
-            headlines.append(f"- {article.title[:80]}...{sentiment_str}")
+            sentiment_str = f" [score: {article.sentiment_hint:.2f}]" if article.sentiment_hint else ""
+            headlines.append(f"  - {article.title[:80]}...{sentiment_str}")
         
-        return f"""
-=== SENTIMENT DATA ===
+        return f"""=== BASIC SENTIMENT DATA FOR {ticker} ===
+Total Items: {summary.get('total_items', 0)}
+Has Pre-computed Scores: {summary.get('has_sentiment_scores', False)}
 
-SUMMARY:
-- Total Items: {summary.get('total_items', 0)}
-- Has Sentiment Scores: {summary.get('has_sentiment_scores', False)}
-
-RECENT NEWS ({len(articles)} articles):
-{chr(10).join(headlines) if headlines else 'No recent news'}
-"""
+Recent Headlines ({len(articles)} articles):
+{chr(10).join(headlines) if headlines else '  No recent news'}"""
     
     # =========================================================================
     # LLM Analysis Generation (Two-Stage with Unified Assessment)
@@ -1118,10 +1312,10 @@ RECENT NEWS ({len(articles)} articles):
         sector = stock_info.get('sector', 'Unknown')
         industry = stock_info.get('industry', 'Unknown')
         
-        # Prepare summaries from structured signals
+        # Prepare summaries from structured signals (all three symmetric)
         tech_summary = self._prepare_technical_summary(data)
         fund_summary = self._prepare_fundamental_summary(data)
-        sent_summary = self._format_sentiment_data(data.get('sentiment', {}))[:800]
+        sent_summary = self._prepare_sentiment_summary(data)
         
         scores_text = f"""Technical: {scores['technical']['score']:.1f}/100
 Fundamental: {scores['fundamental']['score']:.1f}/100
