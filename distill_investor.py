@@ -9,22 +9,30 @@ search-dependent, occasionally-messy step, so it lives in its own offline tool.
 The runtime only ever READS the cache it produces — fast, deterministic, and
 with no search/API dependency at analyze time.
 
-Pipeline (two LLM calls + a handful of fixed searches):
-    retrieve()  -> fixed templated web searches -> cheap cleanup pass -> source brief
-    extract()   -> strong model turns the brief into a structured, evidence-gated framework
-    save()      -> framework.json (machine-consumed) + SKILL.md (human-vetted) + metadata.json
+Pipeline (two LLM calls + a source):
+    retrieve()         -> fixed templated web searches  -> cheap cleanup pass -> source brief
+    load_posts_brief() -> pre-fetched X-posts JSON file  -> cheap cleanup pass -> source brief
+    extract()          -> strong model turns the brief into a structured, evidence-gated framework
+    save()             -> framework.json (machine-consumed) + SKILL.md (human-vetted) + metadata.json
+
+Two source modes share the same downstream pipeline:
+  * Web mode (default): keyword search via Tavily. Good for investors whose thinking
+    lives in letters, interviews, and articles.
+  * X-posts mode (--posts): distill straight from a file of the investor's own posts.
+    Good for X-native investors that general web search under-serves.
 
 Because WE control the output format, the runtime consumes framework.json directly.
 No fragile parsing of someone else's SKILL.md layout.
 
 Usage:
     python distill_investor.py "Charlie Munger"
-    python distill_investor.py "Serenity@aleabitoreddit" --key serenity-aleabitoreddit
-    python distill_investor.py "Warren Buffett" --review     # print SKILL.md after, for vetting
+    python distill_investor.py "Warren Buffett" --review            # print SKILL.md after, for vetting
+    python distill_investor.py --posts serenity_posts.json          # name/handle derived from the file
+    python distill_investor.py "Serenity" --posts serenity_posts.json --key serenity-aleabitoreddit
 
 Env:
     ANTHROPIC_API_KEY   (required)
-    TAVILY_API_KEY      (required unless you swap web_search() for another provider)
+    TAVILY_API_KEY      (required for web mode; not needed for --posts mode)
 """
 
 import os
@@ -43,7 +51,7 @@ load_dotenv()
 
 CACHE_DIR = "data/perspectives_cache"
 STRONG_MODEL = "claude-sonnet-4-5"   # extraction — matches repo convention
-CHEAP_MODEL = "claude-haiku-4-5"     # search-result cleanup
+CHEAP_MODEL = "claude-haiku-4-5"     # search-result / post cleanup
 
 
 # =============================================================================
@@ -86,7 +94,7 @@ def web_search(query: str, max_results: int = 5) -> List[Dict]:
 
 
 # =============================================================================
-# Step 1 — Retrieve: fixed templated searches + a cheap cleanup pass
+# Step 1a — Retrieve (web): fixed templated searches + a cheap cleanup pass
 # =============================================================================
 SEARCH_TEMPLATES = [
     "{investor} investment philosophy",
@@ -127,6 +135,97 @@ def retrieve(investor: str) -> str:
             SystemMessage(content=CLEANUP_SYSTEM),
             # cap input so the (paid) extraction call stays bounded
             HumanMessage(content=f"INVESTOR: {investor}\n\nRAW RESULTS:\n{blob[:40000]}"),
+        ]
+    )
+    return msg.content if isinstance(msg.content, str) else str(msg.content)
+
+
+# =============================================================================
+# Step 1b — Retrieve (X posts): pre-fetched JSON file + a cheap cleanup pass
+# -----------------------------------------------------------------------------
+# Same contract as retrieve(): in -> source brief, out -> bounded source brief.
+# Drops straight into the pipeline; extract()/compute_quality()/save() unchanged.
+# =============================================================================
+POST_CHAR_BUDGET = 38000   # packed posts cap before the cleanup pass condenses further
+MIN_POST_CHARS = 15        # drop empty / link-only / one-word posts
+
+POSTS_CLEANUP_SYSTEM = (
+    "You are condensing one investor's own X/Twitter posts into a clean brief about "
+    "their INVESTMENT thinking. Keep only posts that reveal how they analyze companies, "
+    "value businesses, size positions, manage risk, or react to being right or wrong. "
+    "Preserve concrete specifics: named tickers/holdings, stated rules, numbers, dates, "
+    "and direct opinions in their own words. Drop memes, banter, engagement-bait, polls, "
+    "off-topic chatter, and pure retweets with no added commentary. When a conviction "
+    "shows up repeatedly, note that it recurs rather than collapsing it to a one-off. "
+    "If the material is thin on actual methodology, say so plainly. Never invent anything."
+)
+
+
+def _clean_post_text(post: Dict) -> str:
+    """Prefer the full long-form note over the truncated `text`, then strip t.co noise."""
+    note = (post.get("note_tweet") or {}).get("text")
+    text = note or post.get("text", "") or ""
+    text = re.sub(r"https?://t\.co/\S+", "", text)          # drop t.co shortlinks
+    text = re.sub(r"[ \t]*\n[ \t]*", "\n", text)            # tidy line breaks
+    return text.strip()
+
+
+def _post_signal(post: Dict) -> int:
+    """Cheap salience proxy: what the audience liked + saved."""
+    m = post.get("public_metrics", {}) or {}
+    return int(m.get("like_count", 0)) + int(m.get("bookmark_count", 0))
+
+
+def load_posts_brief(path: str) -> str:
+    """
+    Build a source brief from a pre-fetched X-posts JSON file (the shape the fetcher
+    emits: {username, display_name, posts: [{text, note_tweet, public_metrics,
+    created_at, ...}]}).
+
+    Posts are packed highest-engagement-first, so if we hit the char budget we drop
+    the low-signal tail rather than the posts people actually valued. The cleanup pass
+    then condenses the selection into an investment-focused brief — which is also where
+    memes / banter / polls get filtered out, keeping extract() honest.
+    """
+    with open(path, encoding="utf-8") as fh:
+        payload = json.load(fh)
+
+    posts = payload.get("posts", []) or []
+    if not posts:
+        return ""
+
+    # highest-engagement first; only the audience-valued tail survives a budget cut
+    posts = sorted(posts, key=_post_signal, reverse=True)
+
+    chunks: List[str] = []
+    used = 0
+    for post in posts:
+        text = _clean_post_text(post)
+        if len(text) < MIN_POST_CHARS:        # skip image-only / link-only / fragments
+            continue
+        # Metrics drove the ranking above, but are kept OUT of the model's view: they
+        # cost tokens and risk conflating "popular" with "core to the methodology".
+        # Date stays — cheap, and lets the model see if a view is recent, stale, or evolving.
+        date = (post.get("created_at") or "")[:10]
+        chunk = f"[{date}]\n{text}"
+        if used + len(chunk) > POST_CHAR_BUDGET:
+            break
+        chunks.append(chunk)
+        used += len(chunk)
+
+    if not chunks:
+        return ""
+
+    blob = "\n\n---\n\n".join(chunks)
+    handle = payload.get("username", "")
+    name = payload.get("display_name", "") or handle
+    cheap = ChatAnthropic(model_name=CHEAP_MODEL, temperature=0, max_tokens=4096)
+    msg = cheap.invoke(
+        [
+            SystemMessage(content=POSTS_CLEANUP_SYSTEM),
+            HumanMessage(
+                content=f"INVESTOR: {name} (@{handle})\n\nTHEIR POSTS:\n{blob[:40000]}"
+            ),
         ]
     )
     return msg.content if isinstance(msg.content, str) else str(msg.content)
@@ -288,7 +387,8 @@ def normalize_key(investor: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", investor.lower()).strip("-")
 
 
-def save(investor: str, key: str, framework: Dict, quality: Dict) -> str:
+def save(investor: str, key: str, framework: Dict, quality: Dict,
+         method: str = "offline-rag-v1") -> str:
     out_dir = os.path.join(CACHE_DIR, key)
     os.makedirs(out_dir, exist_ok=True)
 
@@ -302,7 +402,7 @@ def save(investor: str, key: str, framework: Dict, quality: Dict) -> str:
         "investor_name": investor,
         "normalized_key": key,
         "distillation_date": datetime.now(timezone.utc).isoformat(),
-        "method": "offline-rag-v1",
+        "method": method,
         "quality_metrics": quality,
     }
     with open(os.path.join(out_dir, "metadata.json"), "w", encoding="utf-8") as fh:
@@ -316,7 +416,11 @@ def save(investor: str, key: str, framework: Dict, quality: Dict) -> str:
 # =============================================================================
 def main():
     ap = argparse.ArgumentParser(description="Distill an investor perspective (offline).")
-    ap.add_argument("investor", help='Name or handle, e.g. "Charlie Munger"')
+    ap.add_argument("investor", nargs="?",
+                    help='Name or handle, e.g. "Charlie Munger". '
+                         'Optional when --posts is given (derived from the file).')
+    ap.add_argument("--posts", metavar="PATH",
+                    help="Distill from a pre-fetched X-posts JSON file instead of web search.")
     ap.add_argument("--key", help="Cache key override (default: normalized name)")
     ap.add_argument("--review", action="store_true",
                     help="Print the generated SKILL.md after distilling, for vetting")
@@ -325,20 +429,38 @@ def main():
     if not os.getenv("ANTHROPIC_API_KEY"):
         raise SystemExit("ANTHROPIC_API_KEY not set.")
 
-    key = args.key or normalize_key(args.investor)
-    print(f"Distilling '{args.investor}'  ->  {CACHE_DIR}/{key}/")
+    # ---- resolve identity + source --------------------------------------------
+    if args.posts:
+        if not os.path.exists(args.posts):
+            raise SystemExit(f"Posts file not found: {args.posts}")
+        with open(args.posts, encoding="utf-8") as fh:
+            header = json.load(fh)
+        handle = header.get("username", "")
+        investor = args.investor or f"{header.get('display_name') or handle} (@{handle})"
+        method = "offline-x-posts-v1"
+        source_desc = f"X posts file ({header.get('count', '?')} posts) -> {args.posts}"
+    else:
+        if not args.investor:
+            raise SystemExit("Provide an investor name/handle, or --posts <file.json>.")
+        investor = args.investor
+        method = "offline-rag-v1"
+        source_desc = "web search (Tavily)"
+
+    key = args.key or normalize_key(investor)
+    print(f"Distilling '{investor}'  ->  {CACHE_DIR}/{key}/")
+    print(f"  source: {source_desc}")
 
     print("  1/3  retrieving source material ...")
-    brief = retrieve(args.investor)
+    brief = load_posts_brief(args.posts) if args.posts else retrieve(investor)
     if not brief.strip():
         print("  ! no usable material retrieved — perspective will be low quality.")
 
     print("  2/3  extracting framework ...")
-    framework = extract(args.investor, brief)
+    framework = extract(investor, brief)
 
     print("  3/3  scoring + saving ...")
     quality = compute_quality(framework)
-    path = save(args.investor, key, framework, quality)
+    path = save(investor, key, framework, quality, method=method)
 
     print(f"\n  saved -> {path}")
     print(f"  confidence: {quality['confidence']}  |  passes gate: {quality['passes_gate']}")

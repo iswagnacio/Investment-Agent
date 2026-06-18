@@ -64,6 +64,12 @@ try:
 except ImportError:
     HAS_SENTIMENT_AGENT = False
 
+try:
+    from perspective_agent import PerspectiveAnalystAgent, PerspectiveNotCachedError
+    HAS_PERSPECTIVE_AGENT = True
+except ImportError:
+    HAS_PERSPECTIVE_AGENT = False
+
 load_dotenv()
 
 
@@ -679,7 +685,7 @@ class GeneralAnalystAgent:
     - Validated fetch with retry for both detailed analyses
     """
     
-    def __init__(self, model: str = "claude-sonnet-4-5", use_specialist_agents: bool = True):
+    def __init__(self, model: str = "claude-sonnet-4-5", use_specialist_agents: bool = True, use_perspective: bool = False):
         if not os.getenv("ANTHROPIC_API_KEY"):
             raise ValueError("ANTHROPIC_API_KEY environment variable not set")
         
@@ -692,7 +698,9 @@ class GeneralAnalystAgent:
         self.technical_agent = None
         self.fundamental_agent = None
         self.sentiment_agent = None
-        
+        self.use_perspective = use_perspective
+        self.perspective_agent = None
+
         if use_specialist_agents:
             if HAS_TECHNICAL_AGENT:
                 try:
@@ -711,10 +719,16 @@ class GeneralAnalystAgent:
                     self.sentiment_agent = SentimentAnalystAgent(model=model)
                 except Exception as e:
                     print(f"Warning: Could not initialize SentimentAnalystAgent: {e}")
-        
+
+        if use_perspective and HAS_PERSPECTIVE_AGENT:
+            try:
+                self.perspective_agent = PerspectiveAnalystAgent(model=model)
+            except Exception as e:
+                print(f"Warning: Could not initialize PerspectiveAnalystAgent: {e}")
+
         self.llm = ChatAnthropic(model_name=model, temperature=0, max_tokens=4096)
     
-    def gather_data(self, ticker: str) -> Dict[str, Any]:
+    def gather_data(self, ticker: str, perspective: str = None) -> Dict[str, Any]:
         """
         Gather all data for analysis.
         
@@ -856,9 +870,29 @@ class GeneralAnalystAgent:
         else:
             data['sentiment_structured'] = None
         
+        # --- Perspective: reads offline-distilled cache; never distills here ---
+        data['perspective'] = None
+        if self.perspective_agent and perspective:
+            try:
+                pres = self.perspective_agent.analyze(
+                    ticker=ticker,
+                    investor=perspective,
+                    fundamental_data=data.get('fundamental'),
+                    technical_data=data.get('technical'),
+                    sentiment_data=data.get('sentiment'),
+                    analysis_type="for_synthesis",
+                )
+                data['perspective'] = pres
+                print(f"   ✓ Perspective applied: {pres['investor']} "
+                      f"({pres['verdict']}, score {pres['score']})")
+            except PerspectiveNotCachedError as e:
+                print(f"   ⚠ {e}")
+            except Exception as e:
+                print(f"   ⚠ Perspective analysis failed: {e}")
+
         return data
     
-    def calculate_scores(self, data: Dict[str, Any]) -> Dict[str, Any]:
+    def calculate_scores(self, data: Dict[str, Any], perspective_weight: float = None) -> Dict[str, Any]:
         """Calculate all scores from gathered data."""
         scores: Dict[str, Any] = {}
         
@@ -882,12 +916,33 @@ class GeneralAnalystAgent:
         else:
             scores['sentiment'] = {'score': 50.0, 'breakdown': {}}
         
-        scores['overall'] = self.scorer.calculate_overall_score(
+        base_overall = self.scorer.calculate_overall_score(
             scores['technical']['score'],
             scores['fundamental']['score'],
             scores['sentiment']['score']
         )
-        
+
+        # Post-blend perspective WITHOUT touching ScoreCalculator.
+        # Provably identical to re-scaling the three base weights by (1 - pw),
+        # because base_overall is already their weighted average:
+        #   (1-pw)(0.35t + 0.45f + 0.20s) + pw·p
+        persp = data.get('perspective')
+        if persp and perspective_weight:
+            pw = self._effective_perspective_weight(perspective_weight, persp.get('metadata', {}))
+            scores['perspective'] = {'score': persp['score'], 'breakdown': persp.get('metadata', {})}
+            scores['overall'] = round(base_overall * (1 - pw) + persp['score'] * pw, 1)
+            scores['weights'] = {
+                'technical':   round(0.35 * (1 - pw), 3),
+                'fundamental': round(0.45 * (1 - pw), 3),
+                'sentiment':   round(0.20 * (1 - pw), 3),
+                'perspective': round(pw, 3),
+            }
+        else:
+            scores['perspective'] = None
+            scores['overall'] = base_overall
+            scores['weights'] = {'technical': 0.35, 'fundamental': 0.45,
+                                 'sentiment': 0.20, 'perspective': 0.0}
+
         scores['signal'] = self.scorer.score_to_signal(scores['overall'])
         
         tech_fund_diff = abs(scores['technical']['score'] - scores['fundamental']['score'])
@@ -905,10 +960,21 @@ class GeneralAnalystAgent:
         if not data.get('sentiment'):
             confidence -= 5
         
+        if persp and persp.get('metadata', {}).get('distillation_confidence') == 'Low':
+            confidence -= 5
+        
         scores['confidence'] = max(30, min(95, confidence))
         
         return scores
     
+    def _effective_perspective_weight(self, requested: float, meta: Dict) -> float:
+        """Clamp to cap, then shrink when the distillation is weak (corrected plan, DP-6)."""
+        MAX_PW = 0.25  # raise only after backtest evidence
+        pw = max(0.0, min(MAX_PW, requested))
+        factor = {'High': 1.0, 'Medium': 0.7, 'Low': 0.4}.get(
+            meta.get('distillation_confidence', 'Medium'), 0.7)
+        return round(pw * factor, 3)
+
     def calculate_price_targets(self, data: Dict[str, Any], scores: Dict[str, Any]) -> Dict[str, Any]:
         """Calculate price targets based on analysis."""
         current_price = data.get('technical', {}).get('price', {}).get('current', 0)
@@ -1053,6 +1119,24 @@ Selection Rationale: {selection_reason}
         
         return summary
     
+    def _prepare_perspective_summary(self, data: Dict) -> str:
+        """Format the perspective signal for the synthesis prompt. Empty string if none."""
+        persp = data.get('perspective')
+        if not persp:
+            return ""
+        m = persp.get('metadata', {})
+        risks = persp.get('key_risks', [])
+        risk_str = ("\nKey risks flagged: " + "; ".join(risks)) if risks else ""
+        return (
+            f"{persp['investor']} — verdict: {persp['verdict']}, "
+            f"score: {persp['score']}/100 "
+            f"(analysis confidence: {m.get('analysis_confidence', '?')}, "
+            f"distillation confidence: {m.get('distillation_confidence', '?')})\n"
+            f"{persp['narrative']}{risk_str}\n"
+            f"NOTE: models the investor's stated heuristics applied to current data — "
+            f"not the investor's actual judgment. Weight accordingly."
+        )
+
     def _format_technical_structured_signals(self, llm_analysis: Dict) -> str:
         """Compact formatting of structured technical signals (mirrors fundamental)."""
         trend = llm_analysis.get('trend_verdict', {})
@@ -1423,6 +1507,7 @@ Overall: {scores['overall']:.1f}/100"""
             fundamental_summary=fund_summary,
             sentiment_summary=sent_summary,
             scores_summary=scores_text,
+            perspective_summary=self._prepare_perspective_summary(data),
             signal=scores['signal'].value,
             confidence=scores['confidence'],
             price_target_low=targets['low'],
@@ -1603,7 +1688,8 @@ Your assessment:"""
                                  sentiment_summary, scores_summary, signal, confidence,
                                  price_target_low, price_target_mid, price_target_high,
                                  target_timeframe, options_strategy,
-                                 detail_fetch_info, additional_context) -> str:
+                                 detail_fetch_info, additional_context,
+                                 perspective_summary: str = "") -> str:
         """Build the final synthesis prompt as a plain string."""
         
         return f"""You are the LEAD INVESTMENT ANALYST creating a final investment recommendation.
@@ -1626,6 +1712,9 @@ FUNDAMENTAL:
 
 SENTIMENT:
 {sentiment_summary}
+
+=== INVESTOR PERSPECTIVE ===
+{perspective_summary if perspective_summary else "(no investor perspective requested)"}
 
 === QUANTITATIVE SCORES ===
 {scores_summary}
@@ -1699,15 +1788,16 @@ Begin your analysis of {ticker}:"""
     # Public API
     # =========================================================================
     
-    def analyze(self, ticker: str) -> str:
+    def analyze(self, ticker: str, perspective: str = None,
+                perspective_weight: float = 0.15) -> str:
         """Perform complete analysis and return formatted report."""
         ticker = ticker.upper()
         
         print(f"Gathering data for {ticker}...")
-        data = self.gather_data(ticker)
+        data = self.gather_data(ticker, perspective=perspective)
         
         print("Calculating scores...")
-        scores = self.calculate_scores(data)
+        scores = self.calculate_scores(data, perspective_weight=perspective_weight)
         
         print("Calculating price targets...")
         targets = self.calculate_price_targets(data, scores)
@@ -1947,9 +2037,13 @@ if __name__ == "__main__":
                        help='Compare multiple stocks')
     parser.add_argument('--screen', '-s', action='store_true',
                        help='Screen portfolio')
+    parser.add_argument('--perspective', '-p', default=None,
+                        help='Investor perspective to apply (must be distilled first)')
+    parser.add_argument('--perspective-weight', type=float, default=0.15,
+                        help='Perspective weight 0–0.25 (default 0.15)')
     args = parser.parse_args()
     
-    agent = GeneralAnalystAgent()
+    agent = GeneralAnalystAgent(use_perspective=bool(args.perspective))
     
     if args.screen:
         print(agent.screen_portfolio(args.tickers))
@@ -1963,5 +2057,6 @@ if __name__ == "__main__":
             print(f"  Options: {rec['options']['strategy']}")
     else:
         for ticker in args.tickers:
-            print(agent.analyze(ticker))
+            print(agent.analyze(ticker, perspective=args.perspective,
+                                perspective_weight=args.perspective_weight))
             print("\n")
