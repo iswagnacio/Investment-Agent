@@ -34,6 +34,8 @@ from enum import Enum
 from dotenv import load_dotenv
 import requests
 
+import config as app_config
+
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -45,7 +47,7 @@ load_dotenv()
 
 class Config:
     """Configuration settings"""
-    CACHE_DIR = "data/news_cache"
+    CACHE_DIR = str(app_config.NEWS_CACHE_DIR)
     CACHE_EXPIRY_HOURS = {'company': 1, 'industry': 2, 'macro': 4}
     REQUEST_TIMEOUT = 30
     RATE_LIMIT = {'finnhub': 60, 'newsapi': 100, 'alphavantage': 5}

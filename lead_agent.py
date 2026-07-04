@@ -13,10 +13,10 @@ UPDATED: Unified structured pipeline for both technical and fundamental agents
 - Validated fetch with retry for both detailed analyses
 
 Provides:
-- Holistic company assessment
-- Near-term price outlook
-- Position recommendations (buy/sell, calls/puts)
+- Holistic company assessment (qualitative judgment, no trade construction)
+- Signal + conviction with an explicit "what would change my mind"
 - Risk assessment and confidence levels
+- A persisted AnalysisRecord per run (data/runs/<date>/<ticker>.json)
 
 Usage:
     from lead_agent import GeneralAnalystAgent
@@ -39,6 +39,16 @@ from dotenv import load_dotenv
 
 from langchain_anthropic import ChatAnthropic
 from langchain_core.prompts import PromptTemplate
+
+import config
+from contracts import AnalysisRecord
+from registry import (
+    Registry,
+    cap_post_blend,
+    effective_custom_weight,
+    load_registry,
+)
+from reporting import render_report
 
 # Import analysis modules
 from technical import TechnicalCalculator
@@ -85,60 +95,9 @@ class Signal(Enum):
     STRONG_SELL = "Strong Sell"
 
 
-class OptionsStrategy(Enum):
-    LONG_CALL = "Long Call"
-    LONG_PUT = "Long Put"
-    COVERED_CALL = "Covered Call"
-    PROTECTIVE_PUT = "Protective Put"
-    BULL_CALL_SPREAD = "Bull Call Spread"
-    BEAR_PUT_SPREAD = "Bear Put Spread"
-    IRON_CONDOR = "Iron Condor"
-    STRADDLE = "Straddle"
-    NO_OPTIONS = "No Options Play"
-
-
-@dataclass
-class AnalysisResult:
-    """Complete analysis result"""
-    ticker: str
-    company_name: str
-    sector: str
-    industry: str
-    current_price: float
-    
-    # Scores (0-100)
-    technical_score: float
-    fundamental_score: float
-    sentiment_score: float
-    overall_score: float
-    
-    # Signals
-    signal: Signal
-    confidence: float  # 0-100
-    
-    # Options
-    options_strategy: OptionsStrategy
-    options_rationale: str
-    
-    # Price targets
-    price_target_low: float
-    price_target_mid: float
-    price_target_high: float
-    target_timeframe: str
-    
-    # Key insights
-    bull_case: List[str]
-    bear_case: List[str]
-    catalysts: List[str]
-    risks: List[str]
-    
-    # Full analysis
-    technical_summary: str
-    fundamental_summary: str
-    sentiment_summary: str
-    overall_analysis: str
-    
-    analysis_date: str
+# The persisted result of an analysis lives in contracts.AnalysisRecord;
+# rendering lives in reporting.render_report. (Phase 1: structure first,
+# prose second — and no price targets / options / P&L.)
 
 
 # =============================================================================
@@ -562,15 +521,12 @@ class ScoreCalculator:
         return round(total_score, 1), scores
     
     @staticmethod
-    def calculate_overall_score(technical: float, fundamental: float, 
-                                sentiment: float) -> float:
-        weights = {
-            'technical': 0.35,
-            'fundamental': 0.45,
-            'sentiment': 0.20
-        }
-        overall = (technical * weights['technical'] + 
-                  fundamental * weights['fundamental'] + 
+    def calculate_overall_score(technical: float, fundamental: float,
+                                sentiment: float,
+                                weights: Dict[str, float] = None) -> float:
+        weights = weights or config.BLEND_WEIGHTS
+        overall = (technical * weights['technical'] +
+                  fundamental * weights['fundamental'] +
                   sentiment * weights['sentiment'])
         return round(overall, 1)
     
@@ -587,40 +543,6 @@ class ScoreCalculator:
         else:
             return Signal.STRONG_SELL
     
-    @staticmethod
-    def determine_options_strategy(signal: Signal, volatility: float, 
-                                   days_to_earnings: int = None,
-                                   sentiment_score: float = 50) -> Tuple[OptionsStrategy, str]:
-        high_vol = volatility > 0.4
-        
-        if signal == Signal.STRONG_BUY:
-            if high_vol:
-                return (OptionsStrategy.BULL_CALL_SPREAD, 
-                       "Strong bullish signal with high volatility - spread limits risk")
-            else:
-                return (OptionsStrategy.LONG_CALL,
-                       "Strong bullish signal with reasonable volatility - direct call exposure")
-        elif signal == Signal.BUY:
-            return (OptionsStrategy.BULL_CALL_SPREAD,
-                   "Moderately bullish - spread provides defined risk/reward")
-        elif signal == Signal.HOLD:
-            if high_vol:
-                return (OptionsStrategy.IRON_CONDOR,
-                       "Neutral outlook with high IV - collect premium from range-bound movement")
-            else:
-                return (OptionsStrategy.COVERED_CALL,
-                       "Neutral outlook - generate income while holding shares")
-        elif signal == Signal.SELL:
-            return (OptionsStrategy.BEAR_PUT_SPREAD,
-                   "Moderately bearish - spread provides defined risk/reward")
-        else:  # STRONG_SELL
-            if high_vol:
-                return (OptionsStrategy.BEAR_PUT_SPREAD,
-                       "Strong bearish signal with high volatility - spread limits risk")
-            else:
-                return (OptionsStrategy.LONG_PUT,
-                       "Strong bearish signal - direct put exposure")
-
 
 # =============================================================================
 # Ticker Validation Helper
@@ -685,14 +607,23 @@ class GeneralAnalystAgent:
     - Validated fetch with retry for both detailed analyses
     """
     
-    def __init__(self, model: str = "claude-sonnet-4-5", use_specialist_agents: bool = True, use_perspective: bool = False):
+    def __init__(self, model: str = config.STRONG_MODEL, use_specialist_agents: bool = True, use_perspective: bool = False):
         if not os.getenv("ANTHROPIC_API_KEY"):
             raise ValueError("ANTHROPIC_API_KEY environment variable not set")
         
+        self.model = model
         self.technical = TechnicalCalculator()
         self.fundamental = FundamentalCalculator()
         self.sentiment = SentimentDataFetcher()
         self.scorer = ScoreCalculator()
+
+        # Assessment registry (Phase 3): core weights + custom agents.
+        # A broken registry.toml must not take the pipeline down.
+        try:
+            self.registry = load_registry()
+        except Exception as e:
+            print(f"Warning: invalid registry.toml ({e}); using defaults")
+            self.registry = Registry()
         
         self.use_specialist_agents = use_specialist_agents
         self.technical_agent = None
@@ -890,6 +821,39 @@ class GeneralAnalystAgent:
             except Exception as e:
                 print(f"   ⚠ Perspective analysis failed: {e}")
 
+        # --- Custom assessments (Phase 3): registry-declared, workspace-backed --
+        # Each is a methodology artifact in data/workspaces/<key>/ applied by the
+        # same machinery as investor perspectives. Permissions are enforced here:
+        # the agent only receives the data sources its manifest lists.
+        data['custom_assessments'] = {}
+        for spec in (self.registry.enabled_custom() if self.registry else []):
+            if not HAS_PERSPECTIVE_AGENT:
+                print(f"   ⚠ {spec.key}: perspective machinery unavailable — skipped")
+                break
+            if spec.permissions.max_llm_calls < 1:
+                print(f"   ⚠ {spec.key}: per-run LLM budget is 0 — skipped")
+                continue
+            allowed = spec.permissions.data_sources
+            try:
+                applier = PerspectiveAnalystAgent(
+                    model=self.model, cache_dir=str(config.WORKSPACES_DIR))
+                res = applier.analyze(
+                    ticker=ticker,
+                    investor=spec.key,
+                    fundamental_data=data.get('fundamental') if 'fundamental' in allowed else None,
+                    technical_data=data.get('technical') if 'technical' in allowed else None,
+                    sentiment_data=data.get('sentiment') if 'sentiment' in allowed else None,
+                    analysis_type="for_synthesis",
+                )
+                data['custom_assessments'][spec.key] = res
+                print(f"   ✓ Custom assessment {spec.key}: "
+                      f"{res['verdict']} (score {res['score']})")
+            except PerspectiveNotCachedError:
+                print(f"   ⚠ {spec.key}: no artifact at "
+                      f"{spec.workspace_dir}/framework.json — author it first; skipped")
+            except Exception as e:
+                print(f"   ⚠ {spec.key}: assessment failed: {e}")
+
         return data
     
     def calculate_scores(self, data: Dict[str, Any], perspective_weight: float = None) -> Dict[str, Any]:
@@ -916,32 +880,61 @@ class GeneralAnalystAgent:
         else:
             scores['sentiment'] = {'score': 50.0, 'breakdown': {}}
         
+        # Core blend weights come from the registry (Phase 3); registry-less
+        # callers (tests, bare instances) fall back to config.BLEND_WEIGHTS.
+        reg = getattr(self, 'registry', None)
+        base_w = dict(reg.core_weights) if reg else dict(config.BLEND_WEIGHTS)
+
         base_overall = self.scorer.calculate_overall_score(
             scores['technical']['score'],
             scores['fundamental']['score'],
-            scores['sentiment']['score']
+            scores['sentiment']['score'],
+            weights=base_w,
         )
 
-        # Post-blend perspective WITHOUT touching ScoreCalculator.
-        # Provably identical to re-scaling the three base weights by (1 - pw),
-        # because base_overall is already their weighted average:
-        #   (1-pw)(0.35t + 0.45f + 0.20s) + pw·p
+        # Post-blend WITHOUT touching ScoreCalculator: perspective + custom
+        # assessments each contribute (score, weight); provably identical to
+        # re-scaling the core weights by (1 - total_pw), because base_overall
+        # is already their weighted average:
+        #   (1 - Σw)(core blend) + Σ(w_i · s_i)
+        post_entries = []  # (name, score, weight)
+
         persp = data.get('perspective')
         if persp and perspective_weight:
             pw = self._effective_perspective_weight(perspective_weight, persp.get('metadata', {}))
             scores['perspective'] = {'score': persp['score'], 'breakdown': persp.get('metadata', {})}
-            scores['overall'] = round(base_overall * (1 - pw) + persp['score'] * pw, 1)
-            scores['weights'] = {
-                'technical':   round(0.35 * (1 - pw), 3),
-                'fundamental': round(0.45 * (1 - pw), 3),
-                'sentiment':   round(0.20 * (1 - pw), 3),
-                'perspective': round(pw, 3),
-            }
+            post_entries.append(('perspective', persp['score'], pw))
         else:
             scores['perspective'] = None
+
+        for key, res in (data.get('custom_assessments') or {}).items():
+            spec = reg.custom.get(key) if reg else None
+            if spec is None:
+                continue
+            w = effective_custom_weight(
+                spec,
+                artifact_confidence=res.get('metadata', {}).get('distillation_confidence'),
+            )
+            post_entries.append((key, res['score'], w))
+
+        # The core domains always keep the majority (registry.MAX_TOTAL_POST_WEIGHT).
+        post_entries = cap_post_blend(post_entries)
+        total_pw = sum(w for _, _, w in post_entries)
+
+        scores['custom'] = {name: {'score': s, 'weight': w}
+                            for name, s, w in post_entries if name != 'perspective'}
+
+        if total_pw > 0:
+            blended = base_overall * (1 - total_pw) + sum(s * w for _, s, w in post_entries)
+            scores['overall'] = round(blended, 1)
+            weights = {k: round(v * (1 - total_pw), 3) for k, v in base_w.items()}
+            for name, _, w in post_entries:
+                weights[name] = w
+            weights.setdefault('perspective', 0.0)
+            scores['weights'] = weights
+        else:
             scores['overall'] = base_overall
-            scores['weights'] = {'technical': 0.35, 'fundamental': 0.45,
-                                 'sentiment': 0.20, 'perspective': 0.0}
+            scores['weights'] = {**base_w, 'perspective': 0.0}
 
         scores['signal'] = self.scorer.score_to_signal(scores['overall'])
         
@@ -969,54 +962,20 @@ class GeneralAnalystAgent:
     
     def _effective_perspective_weight(self, requested: float, meta: Dict) -> float:
         """Clamp to cap, then shrink when the distillation is weak (corrected plan, DP-6)."""
-        MAX_PW = 0.25  # raise only after backtest evidence
-        pw = max(0.0, min(MAX_PW, requested))
+        pw = max(0.0, min(config.MAX_PERSPECTIVE_WEIGHT, requested))
         factor = {'High': 1.0, 'Medium': 0.7, 'Low': 0.4}.get(
             meta.get('distillation_confidence', 'Medium'), 0.7)
         return round(pw * factor, 3)
 
-    def calculate_price_targets(self, data: Dict[str, Any], scores: Dict[str, Any]) -> Dict[str, Any]:
-        """Calculate price targets based on analysis."""
-        current_price = data.get('technical', {}).get('price', {}).get('current', 0)
-        if not current_price:
-            current_price = data.get('fundamental', {}).get('valuation_ratios', {}).get('price', 0)
-        
-        if not current_price:
-            return {'low': 0, 'mid': 0, 'high': 0, 'current': 0, 'timeframe': '3-6 months'}
-        
-        score = scores['overall']
-        
-        if score >= 75:
-            expected_return = 0.15
-            range_width = 0.10
-        elif score >= 60:
-            expected_return = 0.08
-            range_width = 0.08
-        elif score >= 40:
-            expected_return = 0.0
-            range_width = 0.06
-        elif score >= 25:
-            expected_return = -0.08
-            range_width = 0.08
-        else:
-            expected_return = -0.15
-            range_width = 0.10
-        
-        hist_vol = data.get('technical', {}).get('volatility', {}).get('historical_vol', 0.3)
-        range_width = max(range_width, hist_vol * 0.5)
-        
-        mid_target = current_price * (1 + expected_return)
-        low_target = mid_target * (1 - range_width)
-        high_target = mid_target * (1 + range_width)
-        
-        return {
-            'low': round(low_target, 2),
-            'mid': round(mid_target, 2),
-            'high': round(high_target, 2),
-            'current': round(current_price, 2),
-            'timeframe': '3-6 months'
-        }
-    
+    @staticmethod
+    def _current_price(data: Dict[str, Any]) -> Optional[float]:
+        """Best-effort spot price from already-gathered data (context only)."""
+        price = data.get('technical', {}).get('price', {}).get('current', 0)
+        if not price:
+            price = data.get('fundamental', {}).get('valuation_ratios', {}).get('price', 0)
+        return round(price, 2) if price else None
+
+
     # =========================================================================
     # Validated Fetch Helpers (with retry for both domains)
     # =========================================================================
@@ -1380,8 +1339,8 @@ Recent Headlines ({len(articles)} articles):
     # LLM Analysis Generation (Two-Stage with Unified Assessment)
     # =========================================================================
     
-    def generate_llm_analysis(self, data: Dict[str, Any], scores: Dict[str, Any], 
-                             targets: Dict[str, Any]) -> Dict[str, Any]:
+    def generate_llm_analysis(self, data: Dict[str, Any],
+                             scores: Dict[str, Any]) -> Dict[str, Any]:
         """
         Two-stage synthesis with unified self-assessment for BOTH domains.
         
@@ -1406,13 +1365,7 @@ Fundamental: {scores['fundamental']['score']:.1f}/100
 Sentiment: {scores['sentiment']['score']:.1f}/100
 Overall: {scores['overall']:.1f}/100"""
         
-        tech = data.get('technical', {})
-        volatility = tech.get('volatility', {}).get('historical_vol', 0.3)
-        options_strategy, options_rationale = self.scorer.determine_options_strategy(
-            scores['signal'], volatility, sentiment_score=scores['sentiment']['score']
-        )
-        
-        current_price = targets['current']
+        current_price = self._current_price(data) or 0
         
         # =====================================================================
         # STAGE 1: UNIFIED ASSESSMENT — Technical AND Fundamental
@@ -1510,11 +1463,6 @@ Overall: {scores['overall']:.1f}/100"""
             perspective_summary=self._prepare_perspective_summary(data),
             signal=scores['signal'].value,
             confidence=scores['confidence'],
-            price_target_low=targets['low'],
-            price_target_mid=targets['mid'],
-            price_target_high=targets['high'],
-            target_timeframe=targets['timeframe'],
-            options_strategy=options_strategy.value,
             detail_fetch_info=detail_fetch_info,
             additional_context=additional_context
         )
@@ -1539,8 +1487,6 @@ Overall: {scores['overall']:.1f}/100"""
         
         return {
             'full_analysis': analysis_text,
-            'options_strategy': options_strategy,
-            'options_rationale': options_rationale,
             'used_detailed_technical': bool(tech_detailed),
             'used_detailed_fundamental': bool(fund_detailed),
             'tech_detail_reason': tech_reason if tech_detailed else None,
@@ -1686,8 +1632,6 @@ Your assessment:"""
     def _build_synthesis_prompt(self, *, ticker, company_name, sector, industry,
                                  current_price, technical_summary, fundamental_summary,
                                  sentiment_summary, scores_summary, signal, confidence,
-                                 price_target_low, price_target_mid, price_target_high,
-                                 target_timeframe, options_strategy,
                                  detail_fetch_info, additional_context,
                                  perspective_summary: str = "") -> str:
         """Build the final synthesis prompt as a plain string."""
@@ -1721,9 +1665,6 @@ SENTIMENT:
 Signal: {signal}
 Confidence: {confidence}%
 
-Price Targets ({target_timeframe}): ${price_target_low:.2f} / ${price_target_mid:.2f} / ${price_target_high:.2f}
-Options: {options_strategy}
-
 ============================================================
 DETAIL FETCH STATUS:
 {detail_fetch_info}
@@ -1747,21 +1688,11 @@ Create a comprehensive investment recommendation integrating all inputs FOR {tic
 - Where do they disagree about {ticker} (requires judgment)?
 {additional_context}
 
-**3. POSITION RECOMMENDATION FOR {ticker}**
-
-EQUITY POSITION:
-- Action: [Buy/Add/Hold/Reduce/Sell + conviction level]
-- Position Size: [% based on confidence: 1-2% low confidence, 3-5% medium, 5-7% high]
-- Entry Strategy: $XX.XX [specific technical level from structured signals]
-- Stop Loss: $XX.XX [below support from technical key levels]
-- Profit Target: $XX.XX [resistance + fundamental upside]
-- Time Horizon: [days/weeks/months based on catalysts]
-
-OPTIONS STRATEGY:
-- Recommended: {options_strategy}
-- Strike: [specific strike based on key levels and targets]
-- Expiration: [date based on catalyst timing]
-- Risk/Reward: [bull/base/bear scenarios with expected P&L]
+**3. VERDICT & CONVICTION FOR {ticker}**
+- Verdict: [Buy/Add/Hold/Reduce/Sell] with conviction level [High/Medium/Low]
+- The single strongest reason FOR this verdict, and the single strongest reason AGAINST it
+- What would change your mind: 2-3 concrete, observable developments that would flip this verdict
+- Time Horizon: over what period does this thesis play out [weeks/months/years, tied to catalysts]
 
 **4. MONITORING FRAMEWORK FOR {ticker}**
 Three specific triggers to watch for {ticker}:
@@ -1774,11 +1705,12 @@ Bull Case (3 bullets): Each showing convergence of positive signals for {ticker}
 Bear Case (3 bullets): Each showing risks across domains for {ticker}
 
 === GUIDELINES ===
-- Be specific with prices, dates, percentages
-- Use key support/resistance levels from technical structured signals for entry/exit points
+- Be specific: name the metrics, levels, and dates your reasoning rests on
+- This is an EVALUATION, not trade construction: no position sizing, entry/stop
+  prices, profit targets, or options strategies
 - Own your synthesis — don't just summarize each domain separately
 - Show reasoning when specialists disagree
-- Action-oriented: help investor make decisions
+- Make the thesis falsifiable: a reader should know exactly what evidence would disprove it
 - 800-1000 words total
 - **CRITICAL: Your entire analysis must be about {ticker} ({company_name}). Do not analyze any other stock.**
 
@@ -1788,92 +1720,113 @@ Begin your analysis of {ticker}:"""
     # Public API
     # =========================================================================
     
-    def analyze(self, ticker: str, perspective: str = None,
-                perspective_weight: float = 0.15) -> str:
-        """Perform complete analysis and return formatted report."""
+    def analyze_to_record(self, ticker: str, perspective: str = None,
+                          perspective_weight: float = config.DEFAULT_PERSPECTIVE_WEIGHT,
+                          save: bool = True) -> AnalysisRecord:
+        """Run a full evaluation and return (and by default persist) the AnalysisRecord.
+
+        This is the headless entrypoint the Phase 2 runner uses; analyze() is
+        the interactive wrapper that renders the record as a report.
+        """
         ticker = ticker.upper()
-        
+
         print(f"Gathering data for {ticker}...")
         data = self.gather_data(ticker, perspective=perspective)
-        
+
         print("Calculating scores...")
         scores = self.calculate_scores(data, perspective_weight=perspective_weight)
-        
-        print("Calculating price targets...")
-        targets = self.calculate_price_targets(data, scores)
-        
+
         print("Generating comprehensive analysis...")
-        llm_result = self.generate_llm_analysis(data, scores, targets)
-        
-        # Build detail status for header
-        detail_lines = []
-        if llm_result['used_detailed_technical']:
-            detail_lines.append(f"Technical: FETCHED — {llm_result['tech_detail_reason']}")
-        else:
-            detail_lines.append("Technical: Structured signals sufficient")
-        if llm_result['used_detailed_fundamental']:
-            detail_lines.append(f"Fundamental: FETCHED — {llm_result['fund_detail_reason']}")
-        else:
-            detail_lines.append("Fundamental: Structured signals sufficient")
-        detail_status = "\n".join(detail_lines)
-        
-        header = f"""
-{'='*80}
-COMPREHENSIVE INVESTMENT ANALYSIS: {ticker}
-{'='*80}
-Company: {data.get('stock_info', {}).get('name', ticker)}
-Sector: {data.get('stock_info', {}).get('sector', 'Unknown')}
-Industry: {data.get('stock_info', {}).get('industry', 'Unknown')}
-Analysis Date: {datetime.now().strftime('%Y-%m-%d %H:%M')}
-{'='*80}
+        llm_result = self.generate_llm_analysis(data, scores)
 
-QUANTITATIVE SUMMARY:
----------------------
-Technical Score:    {scores['technical']['score']:>6.1f}/100
-Fundamental Score:  {scores['fundamental']['score']:>6.1f}/100
-Sentiment Score:    {scores['sentiment']['score']:>6.1f}/100
-                    ---------
-Overall Score:      {scores['overall']:>6.1f}/100
+        record = self.build_record(data, scores, llm_result)
+        if save:
+            path = record.save()
+            print(f"Saved analysis record -> {path}")
+        return record
 
-Signal: {scores['signal'].value}
-Confidence: {scores['confidence']}%
+    def analyze(self, ticker: str, perspective: str = None,
+                perspective_weight: float = config.DEFAULT_PERSPECTIVE_WEIGHT) -> str:
+        """Run a full evaluation, persist the AnalysisRecord, return the rendered report."""
+        record = self.analyze_to_record(ticker, perspective=perspective,
+                                        perspective_weight=perspective_weight)
+        return render_report(record)
 
-Price Targets ({targets['timeframe']}):
-  Current: ${targets['current']:.2f}
-  Low:     ${targets['low']:.2f} ({((targets['low']/targets['current'])-1)*100:+.1f}%)
-  Mid:     ${targets['mid']:.2f} ({((targets['mid']/targets['current'])-1)*100:+.1f}%)
-  High:    ${targets['high']:.2f} ({((targets['high']/targets['current'])-1)*100:+.1f}%)
+    def build_record(self, data: Dict[str, Any], scores: Dict[str, Any],
+                     llm_result: Dict[str, Any] = None) -> AnalysisRecord:
+        """Assemble the persisted AnalysisRecord from pipeline outputs.
 
-{'='*80}
-DETAILED ANALYSIS STATUS:
-{detail_status}
-{'='*80}
+        The record is the product; the printed report is rendered from it
+        (reporting.render_report). llm_result is optional so quick/screening
+        paths can produce thesis-less records.
+        """
+        info = data.get('stock_info', {})
+        llm_result = llm_result or {}
 
-DETAILED ANALYSIS:
-==================
+        signals: Dict[str, Any] = {}
+        for domain in ('technical', 'fundamental', 'sentiment'):
+            entry: Dict[str, Any] = {
+                'score': scores[domain]['score'],
+                'breakdown': scores[domain].get('breakdown', {}),
+            }
+            structured = data.get(f'{domain}_structured')
+            if isinstance(structured, dict):
+                entry['structured'] = structured
+            signals[domain] = entry
 
-{llm_result['full_analysis']}
-"""
-        
-        return header
-    
+        key_risks: List[str] = []
+        persp = data.get('perspective')
+        if persp:
+            signals['perspective'] = {
+                'score': persp.get('score'),
+                'verdict': persp.get('verdict'),
+                'narrative': persp.get('narrative'),
+                'metadata': persp.get('metadata', {}),
+            }
+            key_risks = list(persp.get('key_risks', []) or [])
+
+        for key, res in (data.get('custom_assessments') or {}).items():
+            signals[key] = {
+                'score': res.get('score'),
+                'verdict': res.get('verdict'),
+                'narrative': res.get('narrative'),
+                'metadata': res.get('metadata', {}),
+            }
+
+        data_flags = [f"{k}: {v}" for k, v in data.items() if k.endswith('_error')]
+        if llm_result.get('used_detailed_technical'):
+            data_flags.append(f"detailed technical fetched — {llm_result.get('tech_detail_reason')}")
+        if llm_result.get('used_detailed_fundamental'):
+            data_flags.append(f"detailed fundamental fetched — {llm_result.get('fund_detail_reason')}")
+
+        return AnalysisRecord(
+            ticker=data['ticker'],
+            company=info.get('name', data['ticker']),
+            sector=info.get('sector', 'Unknown'),
+            industry=info.get('industry', 'Unknown'),
+            current_price=self._current_price(data),
+            model=self.model,
+            signals=signals,
+            weights=scores['weights'],
+            overall_score=scores['overall'],
+            signal=scores['signal'].value,
+            confidence=scores['confidence'],
+            thesis=llm_result.get('full_analysis', ''),
+            key_risks=key_risks,
+            data_flags=data_flags,
+        )
+
     def get_quick_recommendation(self, ticker: str) -> Dict[str, Any]:
-        """Get quick recommendation without full LLM analysis."""
+        """Get quick recommendation without full LLM synthesis (not persisted)."""
         ticker = ticker.upper()
-        
+
         data = self.gather_data(ticker)
         scores = self.calculate_scores(data)
-        targets = self.calculate_price_targets(data, scores)
-        
-        volatility = data.get('technical', {}).get('volatility', {}).get('historical_vol', 0.3)
-        options_strategy, options_rationale = self.scorer.determine_options_strategy(
-            scores['signal'], volatility, sentiment_score=scores['sentiment']['score']
-        )
-        
+
         return {
             'ticker': ticker,
             'company': data.get('stock_info', {}).get('name', ticker),
-            'current_price': targets['current'],
+            'current_price': self._current_price(data),
             'scores': {
                 'technical': scores['technical']['score'],
                 'fundamental': scores['fundamental']['score'],
@@ -1882,11 +1835,6 @@ DETAILED ANALYSIS:
             },
             'signal': scores['signal'].value,
             'confidence': scores['confidence'],
-            'price_targets': targets,
-            'options': {
-                'strategy': options_strategy.value,
-                'rationale': options_rationale
-            }
         }
     
     def compare_stocks(self, tickers: List[str]) -> str:
@@ -1915,10 +1863,11 @@ Analysis Date: {datetime.now().strftime('%Y-%m-%d %H:%M')}
         
         rows = []
         for r in results:
+            price = f"${r['current_price']:>8.2f}" if r['current_price'] else f"{'n/a':>9}"
             rows.append(
                 f"{r['ticker']:<10}"
                 f"{r['company'][:23]:<25}"
-                f"${r['current_price']:>8.2f}"
+                f"{price}"
                 f"{r['scores']['technical']:>8.1f}"
                 f"{r['scores']['fundamental']:>8.1f}"
                 f"{r['scores']['sentiment']:>8.1f}"
@@ -1926,16 +1875,8 @@ Analysis Date: {datetime.now().strftime('%Y-%m-%d %H:%M')}
                 f"{r['signal']:<15}"
                 f"{r['confidence']:>7.0f}%"
             )
-        
-        details = []
-        for r in results:
-            pt = r['price_targets']
-            details.append(f"""
-{r['ticker']}:
-  Price Targets: ${pt['low']:.2f} / ${pt['mid']:.2f} / ${pt['high']:.2f}
-  Options: {r['options']['strategy']} - {r['options']['rationale'][:60]}...""")
-        
-        return header + "\n" + "\n".join(rows) + "\n" + "-"*100 + "\n".join(details)
+
+        return header + "\n" + "\n".join(rows) + "\n" + "-"*100
     
     def screen_portfolio(self, tickers: List[str]) -> str:
         """Screen a portfolio of stocks and provide overview."""
@@ -2039,8 +1980,10 @@ if __name__ == "__main__":
                        help='Screen portfolio')
     parser.add_argument('--perspective', '-p', default=None,
                         help='Investor perspective to apply (must be distilled first)')
-    parser.add_argument('--perspective-weight', type=float, default=0.15,
-                        help='Perspective weight 0–0.25 (default 0.15)')
+    parser.add_argument('--perspective-weight', type=float,
+                        default=config.DEFAULT_PERSPECTIVE_WEIGHT,
+                        help=f'Perspective weight 0–{config.MAX_PERSPECTIVE_WEIGHT} '
+                             f'(default {config.DEFAULT_PERSPECTIVE_WEIGHT})')
     args = parser.parse_args()
     
     agent = GeneralAnalystAgent(use_perspective=bool(args.perspective))
@@ -2053,8 +1996,6 @@ if __name__ == "__main__":
         for ticker in args.tickers:
             rec = agent.get_quick_recommendation(ticker)
             print(f"\n{ticker}: {rec['signal']} (Score: {rec['scores']['overall']:.1f}, Confidence: {rec['confidence']}%)")
-            print(f"  Targets: ${rec['price_targets']['low']:.2f} / ${rec['price_targets']['mid']:.2f} / ${rec['price_targets']['high']:.2f}")
-            print(f"  Options: {rec['options']['strategy']}")
     else:
         for ticker in args.tickers:
             print(agent.analyze(ticker, perspective=args.perspective,

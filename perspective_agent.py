@@ -29,7 +29,6 @@ Usage:
 """
 
 import os
-import re
 import json
 import glob
 from typing import Dict, List, Optional, Any
@@ -38,23 +37,14 @@ from dotenv import load_dotenv
 from langchain_anthropic import ChatAnthropic
 from langchain_core.messages import SystemMessage, HumanMessage
 
+import config
+from config import normalize_key as _normalize_key, strip_fences as _strip_fences
+
 load_dotenv()
 
 
 class PerspectiveNotCachedError(Exception):
     """Raised when a perspective is requested but not present in the cache."""
-
-
-def _strip_fences(text: str) -> str:
-    text = text.strip()
-    text = re.sub(r"^```(?:json)?", "", text)
-    text = re.sub(r"```$", "", text)
-    return text.strip()
-
-
-def _normalize_key(investor: str) -> str:
-    """Must match distill_investor.normalize_key()."""
-    return re.sub(r"[^a-z0-9]+", "-", investor.lower()).strip("-")
 
 
 # Verdict -> base score, used only as a fallback if the model omits a numeric score.
@@ -78,8 +68,8 @@ class PerspectiveAnalystAgent:
       - "comprehensive": same dict, but 'narrative' carries a longer prose write-up
     """
 
-    def __init__(self, model: str = "claude-sonnet-4-5",
-                 cache_dir: str = "data/perspectives_cache"):
+    def __init__(self, model: str = config.STRONG_MODEL,
+                 cache_dir: str = str(config.PERSPECTIVES_CACHE_DIR)):
         if not os.getenv("ANTHROPIC_API_KEY"):
             raise ValueError("ANTHROPIC_API_KEY environment variable not set")
         self.cache_dir = cache_dir
@@ -343,9 +333,7 @@ if __name__ == "__main__":
     except Exception as e:
         print(f"(no fundamental data: {e})")
 
-    result = agent.analyze(args.investor, args.ticker, fundamental_data=fund,
-                           analysis_type="comprehensive") if False else \
-             agent.analyze(args.ticker, args.investor, fundamental_data=fund,
+    result = agent.analyze(args.ticker, args.investor, fundamental_data=fund,
                            analysis_type="comprehensive")
     print(f"\n{result['investor']} on {args.ticker.upper()}: "
           f"{result['verdict']}  (score {result['score']})")

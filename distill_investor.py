@@ -47,11 +47,14 @@ from dotenv import load_dotenv
 from langchain_anthropic import ChatAnthropic
 from langchain_core.messages import SystemMessage, HumanMessage
 
+import config
+from config import normalize_key, strip_fences as _strip_fences
+
 load_dotenv()
 
-CACHE_DIR = "data/perspectives_cache"
-STRONG_MODEL = "claude-sonnet-4-5"   # extraction — matches repo convention
-CHEAP_MODEL = "claude-haiku-4-5"     # search-result / post cleanup
+CACHE_DIR = str(config.PERSPECTIVES_CACHE_DIR)
+STRONG_MODEL = config.STRONG_MODEL   # extraction
+CHEAP_MODEL = config.CHEAP_MODEL     # search-result / post cleanup
 
 
 # =============================================================================
@@ -234,24 +237,27 @@ def load_posts_brief(path: str) -> str:
 # =============================================================================
 # Step 2 — Extract: structured, evidence-gated investment framework
 # =============================================================================
-EXTRACTION_SYSTEM = """You extract an INVESTMENT METHODOLOGY from source material about an investor.
+EXTRACTION_SYSTEM = """You extract a TRANSFERABLE INVESTMENT METHODOLOGY from source material about an
+investor. The goal is their reusable REASONING, expressed so it can be applied to ANY stock in ANY
+industry — NOT a list of the names, sectors, or themes they happen to trade.
+
 You also have background knowledge of well-known investors; you may use it, but every claim must be
 something you would defend as this investor's actual approach. Never invent specifics to fill space.
 
 Output ONLY valid JSON (no prose, no markdown fences) matching this schema exactly:
 {
   "investor_name": str,
-  "summary": str,                          // 2-3 sentences on their core approach
+  "summary": str,                          // 2-3 sentences; lead with the METHOD, not the sectors
   "mental_models": [
     {"name": str, "description": str, "how_applied": str}
   ],
   "decision_heuristics": [
     {"rule": str, "example": str}
   ],
-  "analysis_dimensions": [str],            // what they examine in a company (e.g. moat, management, balance sheet)
+  "analysis_dimensions": [str],            // the questions the method asks of ANY company
   "circle_of_competence": {
-    "understands": [str],                  // sectors/situations they actively engage
-    "avoids": [str]                        // what they explicitly stay away from
+    "understands": [str],                  // SITUATION TYPES the method can judge (by mechanism, any sector)
+    "avoids": [str]                        // SITUATION TYPES where the method has NO EDGE (not sector names)
   },
   "red_flags": [str],                      // what makes them pass or sell
   "evidence": {
@@ -263,19 +269,31 @@ Output ONLY valid JSON (no prose, no markdown fences) matching this schema exact
   "notes": str                             // caveats; explicitly flag thin or guessed areas
 }
 
+How to fill it — abstract the METHOD, keep the cases as EVIDENCE:
+- Every mental_model and decision_heuristic must state the GENERAL MECHANISM (why it works, in any
+  industry), phrased WITHOUT a specific company or sector as the rule. Put the investor's concrete
+  cases in "how_applied" / "example" as ILLUSTRATIONS. A ticker or sector must never BE the rule.
+    RIGHT: "A sole/primary supplier of a non-interchangeable input to scaling customers captures
+            bottleneck pricing power — e.g. $SIVE as the lone CW-laser source for CPO players."
+    WRONG: "Buy CW-laser suppliers in the photonics supercycle."
+  A reader should be able to apply each rule to a railroad, a ratings agency, or a payment network.
+- analysis_dimensions are the questions the method asks of ANY company (e.g. "Where does it sit in
+  its value chain?", "Is its position substitutable?", "Is recognition ahead of or behind reality?").
+- circle_of_competence is defined by MECHANISM, not sector. "understands" = situation types where the
+  method has real purchase (e.g. value driven by a structural chokepoint, an architectural transition,
+  or an adoption inflection — in ANY industry). "avoids" = situation types where it has NO EDGE because
+  value is driven by something the method does not model (e.g. brand/taste-driven demand, rate- or
+  regulation-driven economics, undifferentiated commodities, or theses already broadly recognized).
+  Preserve these blind spots honestly — a portable method is not an all-knowing one, and these are what
+  let it correctly abstain rather than force a view.
+- red_flags are general disqualifiers, not sector exclusions.
+
 Rules:
 - If the material (and your knowledge) do not support a field, return an empty list/string and mark
   that section's evidence "insufficient". Do NOT fabricate.
-- Prefer concrete, falsifiable rules over vague platitudes.
+- Prefer concrete, falsifiable mechanisms over vague platitudes; keep the supporting examples.
 - Investment methodology ONLY. Ignore personality, speaking style, and biography.
 - "overall" should reflect the weakest load-bearing sections, not an average."""
-
-
-def _strip_fences(text: str) -> str:
-    text = text.strip()
-    text = re.sub(r"^```(?:json)?", "", text)
-    text = re.sub(r"```$", "", text)
-    return text.strip()
 
 
 def extract(investor: str, source_brief: str) -> Dict:
@@ -382,14 +400,10 @@ def render_skill_md(framework: Dict, quality: Dict) -> str:
     return "\n".join(lines)
 
 
-def normalize_key(investor: str) -> str:
-    """'Serenity@aleabitoreddit' -> 'serenity-aleabitoreddit'; 'Charlie Munger' -> 'charlie-munger'."""
-    return re.sub(r"[^a-z0-9]+", "-", investor.lower()).strip("-")
-
-
 def save(investor: str, key: str, framework: Dict, quality: Dict,
-         method: str = "offline-rag-v1") -> str:
-    out_dir = os.path.join(CACHE_DIR, key)
+         method: str = "offline-rag-v1", source_brief: str = "",
+         out_root: str = None) -> str:
+    out_dir = os.path.join(out_root or CACHE_DIR, key)
     os.makedirs(out_dir, exist_ok=True)
 
     with open(os.path.join(out_dir, "framework.json"), "w", encoding="utf-8") as fh:
@@ -398,7 +412,14 @@ def save(investor: str, key: str, framework: Dict, quality: Dict,
     with open(os.path.join(out_dir, "SKILL.md"), "w", encoding="utf-8") as fh:
         fh.write(render_skill_md(framework, quality))
 
+    # Cache the source brief so the extraction can be re-run later with an
+    # improved prompt (--from-brief) without re-fetching web/X sources.
+    if source_brief:
+        with open(os.path.join(out_dir, "source_brief.txt"), "w", encoding="utf-8") as fh:
+            fh.write(source_brief)
+
     metadata = {
+        "schema_version": 1,
         "investor_name": investor,
         "normalized_key": key,
         "distillation_date": datetime.now(timezone.utc).isoformat(),
@@ -422,6 +443,12 @@ def main():
     ap.add_argument("--posts", metavar="PATH",
                     help="Distill from a pre-fetched X-posts JSON file instead of web search.")
     ap.add_argument("--key", help="Cache key override (default: normalized name)")
+    ap.add_argument("--workspace", action="store_true",
+                    help="Save to data/workspaces/<key>/ (custom assessment artifact "
+                         "for registry.toml) instead of the perspectives cache.")
+    ap.add_argument("--from-brief", action="store_true",
+                    help="Re-extract from the cached source brief (no web/X fetch). "
+                         "Use after improving the extraction prompt.")
     ap.add_argument("--review", action="store_true",
                     help="Print the generated SKILL.md after distilling, for vetting")
     args = ap.parse_args()
@@ -447,11 +474,27 @@ def main():
         source_desc = "web search (Tavily)"
 
     key = args.key or normalize_key(investor)
-    print(f"Distilling '{investor}'  ->  {CACHE_DIR}/{key}/")
+    out_root = str(config.WORKSPACES_DIR) if args.workspace else CACHE_DIR
+
+    if args.from_brief:
+        brief_path = os.path.join(out_root, key, "source_brief.txt")
+        if not os.path.exists(brief_path):
+            raise SystemExit(
+                f"No cached source brief at {brief_path}. "
+                f"Run a full distillation first (it caches the brief for re-extraction)."
+            )
+        method = "offline-re-extract-v1"
+        source_desc = f"cached source brief -> {brief_path}"
+
+    print(f"Distilling '{investor}'  ->  {out_root}/{key}/")
     print(f"  source: {source_desc}")
 
     print("  1/3  retrieving source material ...")
-    brief = load_posts_brief(args.posts) if args.posts else retrieve(investor)
+    if args.from_brief:
+        with open(brief_path, encoding="utf-8") as fh:
+            brief = fh.read()
+    else:
+        brief = load_posts_brief(args.posts) if args.posts else retrieve(investor)
     if not brief.strip():
         print("  ! no usable material retrieved — perspective will be low quality.")
 
@@ -460,7 +503,8 @@ def main():
 
     print("  3/3  scoring + saving ...")
     quality = compute_quality(framework)
-    path = save(investor, key, framework, quality, method=method)
+    path = save(investor, key, framework, quality, method=method,
+                source_brief=brief, out_root=out_root)
 
     print(f"\n  saved -> {path}")
     print(f"  confidence: {quality['confidence']}  |  passes gate: {quality['passes_gate']}")

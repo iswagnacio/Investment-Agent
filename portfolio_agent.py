@@ -8,13 +8,15 @@ import json
 
 from portfolio import PortfolioManager
 from dotenv import load_dotenv
+
+import config
 load_dotenv()
 
 
 class PortfolioTrackerAgent:
     """LangChain agent for portfolio management"""
     
-    def __init__(self, csv_path: str = "holdings.csv", model: str = "claude-haiku-4-5"):
+    def __init__(self, csv_path: str = str(config.HOLDINGS_CSV), model: str = config.CHEAP_MODEL):
         # Verify API key is set
         if not os.getenv("ANTHROPIC_API_KEY"):
             raise ValueError("ANTHROPIC_API_KEY environment variable not set")
@@ -29,7 +31,7 @@ class PortfolioTrackerAgent:
             Tool(
                 name="get_holdings",
                 func=lambda _: self.portfolio_mgr.get_holdings(),  # Wrap to ignore input
-                description="Get all current holdings with positions, cost basis, and allocation percentages. No input required."
+                description="List all currently held tickers with acquisition date and notes. No input required."
             ),
             Tool(
                 name="get_watchlist",
@@ -44,7 +46,7 @@ class PortfolioTrackerAgent:
             Tool(
                 name="get_portfolio_summary",
                 func=lambda _: self.portfolio_mgr.get_portfolio_summary(),  # Wrap to ignore input
-                description="Get a high-level summary of the entire portfolio including number of positions and top holdings. No input required."
+                description="Get a high-level summary of the ticker universe (held and watched tickers). No input required."
             ),
             Tool(
                 name="add_position",
@@ -92,8 +94,9 @@ class PortfolioTrackerAgent:
         tools = self._create_tools()
         
         # Create the ReAct prompt template
-        template = """You are a portfolio tracking assistant. You help users manage their investment portfolio 
-by tracking holdings, cost basis, and watchlist items.
+        template = """You are a portfolio tracking assistant. You help users manage the universe of
+tickers they hold or watch. You track WHICH tickers are held/watched and why (notes),
+not profits — never compute or discuss P&L, returns, or cost-basis math.
 
 Your responsibilities:
 - Provide clear information about current holdings and their allocations

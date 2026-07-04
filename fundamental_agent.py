@@ -27,6 +27,8 @@ from typing import Dict, List, Optional
 from datetime import datetime
 from dotenv import load_dotenv
 
+import config
+
 from langchain_anthropic import ChatAnthropic
 from langchain.prompts import PromptTemplate
 
@@ -43,7 +45,7 @@ class FundamentalAnalystAgent:
     FIXED: All prompts now strongly anchor to the ticker being analyzed.
     """
     
-    def __init__(self, model: str = "claude-sonnet-4-5"):
+    def __init__(self, model: str = config.STRONG_MODEL):
         if not os.getenv("ANTHROPIC_API_KEY"):
             raise ValueError("ANTHROPIC_API_KEY environment variable not set")
         

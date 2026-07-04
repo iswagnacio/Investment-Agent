@@ -28,6 +28,8 @@ Usage:
 import os
 import json
 import logging
+
+import config as app_config
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Any, Tuple
 from dataclasses import dataclass, field
@@ -98,7 +100,7 @@ class FundamentalData:
 class FundamentalCache:
     """Simple file-based cache for fundamental data"""
     
-    def __init__(self, cache_dir: str = "data/fundamental_cache"):
+    def __init__(self, cache_dir: str = str(app_config.FUNDAMENTAL_CACHE_DIR)):
         self.cache_dir = cache_dir
         os.makedirs(cache_dir, exist_ok=True)
     

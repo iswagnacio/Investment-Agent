@@ -25,6 +25,8 @@ from langchain.prompts import PromptTemplate
 from typing import Dict, List, Optional
 import json
 from dotenv import load_dotenv
+
+import config
 import os
 
 from technical import TechnicalCalculator
@@ -42,7 +44,7 @@ class TechnicalAnalyzerAgent:
     - "comprehensive": Detailed prose analysis
     """
     
-    def __init__(self, model: str = "claude-sonnet-4-5"):
+    def __init__(self, model: str = config.STRONG_MODEL):
         if not os.getenv("ANTHROPIC_API_KEY"):
             raise ValueError("ANTHROPIC_API_KEY environment variable not set")
         

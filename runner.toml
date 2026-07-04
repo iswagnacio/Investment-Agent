@@ -1,0 +1,20 @@
+# Runner configuration (read by runner.py; all sections optional).
+# The SCHEDULE lives outside the repo — point cron/launchd/a Claude routine at:
+#     cd /Users/junwei/Personal/Investment && \
+#     /opt/homebrew/Caskroom/miniforge/base/envs/invest/bin/python runner.py
+
+[universe]
+# Explicit tickers to evaluate. Empty (or omitted) -> holdings.csv universe
+# (all 'hold' rows, then 'watch' rows).
+tickers = []
+
+[analysis]
+# Investor perspective to apply (must be distilled first — see distill_investor.py).
+# Omit or set "" to run without one.
+perspective = ""
+perspective_weight = 0.15
+use_specialist_agents = true
+
+[run]
+# Per-ticker worker threads. 1 = sequential (recommended until rate limits are known).
+parallel = 1

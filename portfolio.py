@@ -1,103 +1,105 @@
+"""
+Universe Manager
+================
+Phase 1 of ROADMAP.md: this module manages the ticker universe the analysis
+pipeline evaluates — which tickers are held vs. watched — not P&L. The CSV
+keeps its historical columns (shares, cost_basis) so existing files load, but
+nothing here computes cost or profit anymore; evaluation quality is measured
+by signal track record (data/runs/), not returns.
+"""
+
 import pandas as pd
+
+import config
 from pathlib import Path
-from typing import Dict, List, Optional
-from datetime import datetime
+from typing import List
 
 
 class PortfolioManager:
-    """Handles portfolio data operations"""
-    
-    def __init__(self, csv_path: str = "holdings.csv"):
+    """Manages the ticker universe stored in holdings.csv."""
+
+    def __init__(self, csv_path: str = str(config.HOLDINGS_CSV)):
         self.csv_path = Path(csv_path)
         self._ensure_file_exists()
-    
+
     def _ensure_file_exists(self):
         """Create portfolio file if it doesn't exist"""
         if not self.csv_path.exists():
             df = pd.DataFrame(columns=[
-                'status', 'ticker', 'shares', 'cost_basis', 
+                'status', 'ticker', 'shares', 'cost_basis',
                 'date_acquired', 'notes'
             ])
             df.to_csv(self.csv_path, index=False)
-    
+
     def read_portfolio(self) -> pd.DataFrame:
         """Read portfolio from CSV"""
         return pd.read_csv(self.csv_path)
-    
-    def get_holdings(self) -> str:
-        """Get all positions with 'hold' status"""
+
+    def get_universe(self) -> List[str]:
+        """All tickers to evaluate — holdings first, then watchlist.
+        This is what a scheduled run (Phase 2 runner) iterates over."""
         df = self.read_portfolio()
-        holdings = df[df['status'] == 'hold'].copy()
-        
+        held = df[df['status'] == 'hold']['ticker'].str.upper().tolist()
+        watched = df[df['status'] == 'watch']['ticker'].str.upper().tolist()
+        seen = set()
+        return [t for t in held + watched if not (t in seen or seen.add(t))]
+
+    def get_holdings(self) -> str:
+        """List positions with 'hold' status (tickers to evaluate, not P&L)."""
+        df = self.read_portfolio()
+        holdings = df[df['status'] == 'hold']
+
         if holdings.empty:
             return "No current holdings in portfolio."
-        
-        # Calculate total value and allocation (placeholder - needs real prices)
-        holdings['total_cost'] = holdings['shares'] * holdings['cost_basis']
-        total_portfolio_cost = holdings['total_cost'].sum()
-        holdings['allocation_pct'] = (holdings['total_cost'] / total_portfolio_cost * 100).round(2)
-        
+
         result = "Current Holdings:\n\n"
         for _, row in holdings.iterrows():
-            result += f"• {row['ticker']}: {row['shares']} shares @ ${row['cost_basis']:.2f}\n"
-            result += f"  Cost Basis: ${row['total_cost']:.2f} ({row['allocation_pct']:.1f}% of portfolio)\n"
-            result += f"  Acquired: {row['date_acquired']}\n"
-            if pd.notna(row['notes']):
-                result += f"  Notes: {row['notes']}\n"
+            result += f"• {row['ticker']} (since {row['date_acquired']})"
+            if pd.notna(row['notes']) and row['notes']:
+                result += f" — {row['notes']}"
             result += "\n"
-        
-        result += f"Total Portfolio Cost Basis: ${total_portfolio_cost:,.2f}"
         return result
-    
+
     def get_watchlist(self) -> str:
         """Get all positions with 'watch' status"""
         df = self.read_portfolio()
         watchlist = df[df['status'] == 'watch']
-        
+
         if watchlist.empty:
             return "Watchlist is empty."
-        
+
         result = "Watchlist:\n\n"
         for _, row in watchlist.iterrows():
             result += f"• {row['ticker']}"
-            if pd.notna(row['notes']):
+            if pd.notna(row['notes']) and row['notes']:
                 result += f" - {row['notes']}"
             result += "\n"
-        
+
         return result
-    
+
     def get_position_details(self, ticker: str) -> str:
         """Get details for a specific ticker"""
         df = self.read_portfolio()
         position = df[df['ticker'].str.upper() == ticker.upper()]
-        
+
         if position.empty:
             return f"No position found for {ticker}."
-        
+
         row = position.iloc[0]
-        
-        if row['status'] == 'hold':
-            total_cost = row['shares'] * row['cost_basis']
-            return (f"Position Details for {row['ticker']}:\n"
-                   f"Status: {row['status']}\n"
-                   f"Shares: {row['shares']}\n"
-                   f"Cost Basis: ${row['cost_basis']:.2f}\n"
-                   f"Total Cost: ${total_cost:.2f}\n"
-                   f"Date Acquired: {row['date_acquired']}\n"
-                   f"Notes: {row['notes'] if pd.notna(row['notes']) else 'None'}")
-        else:
-            return (f"Watchlist Item: {row['ticker']}\n"
-                   f"Notes: {row['notes'] if pd.notna(row['notes']) else 'None'}")
-    
-    def add_position(self, ticker: str, shares: float, cost_basis: float, 
+        return (f"{'Position' if row['status'] == 'hold' else 'Watchlist item'}: {row['ticker']}\n"
+                f"Status: {row['status']}\n"
+                f"Date Acquired: {row['date_acquired'] if pd.notna(row['date_acquired']) else '—'}\n"
+                f"Notes: {row['notes'] if pd.notna(row['notes']) else 'None'}")
+
+    def add_position(self, ticker: str, shares: float, cost_basis: float,
                     date_acquired: str, notes: str = "") -> str:
-        """Add a new holding to portfolio"""
+        """Record a held ticker. shares/cost_basis are stored for the CSV's
+        historical shape but are not used in any calculation."""
         df = self.read_portfolio()
-        
-        # Check if ticker already exists
+
         if ticker.upper() in df['ticker'].str.upper().values:
             return f"Error: {ticker} already exists in portfolio. Use update function instead."
-        
+
         new_row = pd.DataFrame([{
             'status': 'hold',
             'ticker': ticker.upper(),
@@ -106,19 +108,19 @@ class PortfolioManager:
             'date_acquired': date_acquired,
             'notes': notes
         }])
-        
+
         df = pd.concat([df, new_row], ignore_index=True)
         df.to_csv(self.csv_path, index=False)
-        
-        return f"Successfully added {shares} shares of {ticker} at ${cost_basis:.2f} per share."
-    
+
+        return f"Successfully added {ticker.upper()} to holdings."
+
     def add_to_watchlist(self, ticker: str, notes: str = "") -> str:
         """Add a ticker to watchlist"""
         df = self.read_portfolio()
-        
+
         if ticker.upper() in df['ticker'].str.upper().values:
             return f"Error: {ticker} already exists in portfolio or watchlist."
-        
+
         new_row = pd.DataFrame([{
             'status': 'watch',
             'ticker': ticker.upper(),
@@ -127,34 +129,20 @@ class PortfolioManager:
             'date_acquired': '',
             'notes': notes
         }])
-        
+
         df = pd.concat([df, new_row], ignore_index=True)
         df.to_csv(self.csv_path, index=False)
-        
+
         return f"Successfully added {ticker} to watchlist."
-    
+
     def get_portfolio_summary(self) -> str:
-        """Get high-level portfolio summary"""
+        """High-level universe summary (counts + tickers; no cost/P&L math)."""
         df = self.read_portfolio()
-        
+
         holdings = df[df['status'] == 'hold']
         watchlist = df[df['status'] == 'watch']
-        
-        summary = "Portfolio Summary:\n\n"
-        summary += f"Total Holdings: {len(holdings)} positions\n"
-        summary += f"Watchlist Items: {len(watchlist)} tickers\n"
-        
-        if not holdings.empty:
-            total_cost = (holdings['shares'] * holdings['cost_basis']).sum()
-            summary += f"Total Cost Basis: ${total_cost:,.2f}\n"
-            summary += f"\nTop Holdings by Cost Basis:\n"
-            
-            holdings_copy = holdings.copy()
-            holdings_copy['total_cost'] = holdings_copy['shares'] * holdings_copy['cost_basis']
-            top_3 = holdings_copy.nlargest(3, 'total_cost')
-            
-            for _, row in top_3.iterrows():
-                pct = (row['total_cost'] / total_cost * 100)
-                summary += f"  • {row['ticker']}: ${row['total_cost']:,.2f} ({pct:.1f}%)\n"
-        
+
+        summary = "Universe Summary:\n\n"
+        summary += f"Holdings:  {len(holdings)} ({', '.join(holdings['ticker']) or 'none'})\n"
+        summary += f"Watchlist: {len(watchlist)} ({', '.join(watchlist['ticker']) or 'none'})\n"
         return summary

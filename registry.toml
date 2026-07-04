@@ -1,0 +1,37 @@
+# Assessment registry (read by registry.py). Adding an assessment = adding an
+# entry here + an artifact in data/workspaces/<key>/ — no lead_agent.py edits.
+
+# Core domain blend weights. Must sum to 1.0. Omit the section to fall back to
+# config.BLEND_WEIGHTS.
+[core]
+technical = 0.35
+fundamental = 0.45
+sentiment = 0.20
+
+# ---------------------------------------------------------------------------
+# Custom assessments (post-blended, trust-gated).
+#
+# Each [agents.<key>] needs a methodology artifact at
+#     data/workspaces/<key>/framework.json   (+ SKILL.md, metadata.json)
+# authored offline — either:
+#     python distill_investor.py "Some Methodology Source" --workspace
+# or by an agent writing the framework.json shape directly into its workspace
+# (registry.ensure_workspace("<key>") creates the directory).
+#
+# Influence is earned, not declared:
+#   effective = min(weight, max_weight, 0.25)
+#               x artifact confidence (High 1.0 / Medium 0.7 / Low 0.4)
+#               x maturity (25% on first run -> 100% after 20 recorded runs)
+# and all post-blend assessments together are capped at 40% of the final score.
+#
+# Example (disabled until you author the artifact):
+#
+# [agents.bottleneck-screen]
+# enabled = false
+# weight = 0.10
+# max_weight = 0.10
+#
+# [agents.bottleneck-screen.permissions]
+# data_sources = ["fundamental", "technical"]   # what data it may see
+# max_llm_calls = 1                             # per-run budget
+# workspace_write = false                       # may offline tools rewrite its artifact

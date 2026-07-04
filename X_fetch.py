@@ -37,6 +37,8 @@ from typing import Optional, List, Dict, Any
 
 import requests
 
+import config as app_config
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -76,7 +78,7 @@ class XPostFetcher:
     def __init__(
         self,
         bearer_token: Optional[str] = None,
-        cache_dir: str = "data/x_cache",
+        cache_dir: str = str(app_config.X_CACHE_DIR),
         timeout: int = 30,
         max_retries: int = 5,
     ):
@@ -333,7 +335,7 @@ def _main() -> None:
                         help="Ignore cache and refetch from the API")
     parser.add_argument("--update", action="store_true",
                         help="Incremental top-up of an existing cache")
-    parser.add_argument("--cache-dir", default="data/x_cache")
+    parser.add_argument("--cache-dir", default=str(app_config.X_CACHE_DIR))
     args = parser.parse_args()
 
     try:
