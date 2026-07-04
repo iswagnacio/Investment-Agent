@@ -19,7 +19,7 @@ Calculated Metrics:
 - Quality scores (Altman Z-Score, Piotroski F-Score, DuPont Analysis)
 
 Usage:
-    from fundamental import FundamentalCalculator
+    from investment.calculators.fundamental import FundamentalCalculator
     
     calc = FundamentalCalculator()
     data = calc.get_all_fundamentals("AAPL")
@@ -29,7 +29,7 @@ import os
 import json
 import logging
 
-import config as app_config
+from investment import config as app_config
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Any, Tuple
 from dataclasses import dataclass, field

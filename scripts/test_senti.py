@@ -3,7 +3,7 @@ Simple test for sentiment_data_fetcher.py
 Run: python test_fetcher.py
 """
 
-from sentiment import SentimentDataFetcher
+from investment.calculators.sentiment import SentimentDataFetcher
 
 # Initialize
 fetcher = SentimentDataFetcher()

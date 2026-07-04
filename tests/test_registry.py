@@ -5,10 +5,10 @@ import json
 
 import pytest
 
-import config
-import registry as registry_mod
-from contracts import AnalysisRecord
-from registry import (
+from investment import config
+import investment.registry as registry_mod
+from investment.contracts import AnalysisRecord
+from investment.registry import (
     MATURITY_FLOOR,
     MATURITY_RUNS,
     MAX_TOTAL_POST_WEIGHT,
@@ -133,7 +133,8 @@ class TestWorkspaces:
 
 class TestLeadAgentCustomBlend:
     def _agent(self, reg):
-        from lead_agent import GeneralAnalystAgent, ScoreCalculator
+        from investment.agents.lead import GeneralAnalystAgent
+        from investment.scoring import ScoreCalculator
         agent = object.__new__(GeneralAnalystAgent)
         agent.scorer = ScoreCalculator()
         agent.registry = reg

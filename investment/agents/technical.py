@@ -9,7 +9,7 @@ UPDATED: Dual-mode output (mirrors fundamental_agent pattern)
 - "comprehensive": Returns detailed prose analysis (fetched on demand)
 
 Usage:
-    from technical_agent import TechnicalAnalyzerAgent
+    from investment.agents.technical import TechnicalAnalyzerAgent
     
     agent = TechnicalAnalyzerAgent()
     
@@ -26,10 +26,10 @@ from typing import Dict, List, Optional
 import json
 from dotenv import load_dotenv
 
-import config
+from investment import config
 import os
 
-from technical import TechnicalCalculator
+from investment.calculators.technical import TechnicalCalculator
 
 load_dotenv()
 

@@ -6,7 +6,7 @@ product; everything here is presentation. Nothing in this module computes —
 if a number isn't in the record, it doesn't belong in the report.
 """
 
-from contracts import AnalysisRecord
+from investment.contracts import AnalysisRecord
 
 
 def render_report(record: AnalysisRecord) -> str:

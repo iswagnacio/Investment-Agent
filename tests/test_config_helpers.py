@@ -1,6 +1,6 @@
 """Unit tests for the shared helpers in config.py — pure functions, no network."""
 
-import config
+from investment import config
 
 
 class TestNormalizeKey:

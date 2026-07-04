@@ -196,7 +196,15 @@ methodology offline, and the lead agent applies it at runtime with trust-gated w
   which Phase 1's run history makes measurable. Signal correctness over time, not
   profit, is the yardstick.
 
-### Phase 4 — Structural migration (mechanical, last)
+### Phase 4 — Structural migration (mechanical, last) — ✅ done 2026-07-03
+
+*Delivered as planned below, with two pragmatic additions: `Signal` +
+`ScoreCalculator` extracted to `investment/scoring.py`, `portfolio.py` became
+`investment/universe.py`, and four root-level entrypoint shims keep the
+documented commands working unchanged (`python runner.py`,
+`python distill_investor.py`, `python lead_agent.py`, `python X_fetch.py` —
+`lead_agent.py` also re-exports for legacy imports). All moves were `git mv`
+so history follows the files.*
 
 Target layout — same design, real packages:
 

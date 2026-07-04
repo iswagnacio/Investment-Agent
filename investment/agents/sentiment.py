@@ -13,7 +13,7 @@ Design:
 - Produces uniform structured JSON for lead agent consumption
 
 Usage:
-    from sentiment_agent import SentimentAnalystAgent
+    from investment.agents.sentiment import SentimentAnalystAgent
     
     agent = SentimentAnalystAgent()
     signals = agent.analyze("AAPL")  # Returns structured JSON string
@@ -25,12 +25,12 @@ from typing import Dict, List, Optional
 from datetime import datetime
 from dotenv import load_dotenv
 
-import config
+from investment import config
 
 from langchain_anthropic import ChatAnthropic
 
-from sentiment import SentimentDataFetcher
-from technical import TechnicalCalculator  # For stock_info lookup
+from investment.calculators.sentiment import SentimentDataFetcher
+from investment.calculators.technical import TechnicalCalculator  # For stock_info lookup
 
 load_dotenv()
 

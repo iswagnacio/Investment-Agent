@@ -34,7 +34,7 @@ from enum import Enum
 from dotenv import load_dotenv
 import requests
 
-import config as app_config
+from investment import config as app_config
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')

@@ -3,9 +3,9 @@ resolution + the cache-key contract between the two. No network, no LLM."""
 
 import pytest
 
-import config
-from distill_investor import compute_quality
-from perspective_agent import PerspectiveAnalystAgent, _normalize_key
+from investment import config
+from investment.offline.distill_investor import compute_quality
+from investment.agents.perspective import PerspectiveAnalystAgent, _normalize_key
 
 
 class TestQualityGate:
@@ -60,11 +60,11 @@ class TestResolveScore:
 class TestCacheKeyContract:
     def test_agent_and_distiller_share_one_normalize_key(self):
         # Phase 0 collapsed the duplicated implementations into config.
-        from distill_investor import normalize_key as distiller_key
+        from investment.offline.distill_investor import normalize_key as distiller_key
         assert distiller_key is config.normalize_key
         assert _normalize_key is config.normalize_key
 
     def test_distiller_cache_dir_matches_agent_default(self):
-        import distill_investor
+        import investment.offline.distill_investor as distill_investor
         agent_default = PerspectiveAnalystAgent.__init__.__defaults__[1]
         assert distill_investor.CACHE_DIR == agent_default == str(config.PERSPECTIVES_CACHE_DIR)

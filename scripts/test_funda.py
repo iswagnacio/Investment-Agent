@@ -17,7 +17,7 @@ print("=" * 60)
 print("TEST 1: Fundamental Calculator (Data Fetching)")
 print("=" * 60)
 
-from fundamental import FundamentalCalculator
+from investment.calculators.fundamental import FundamentalCalculator
 
 calc = FundamentalCalculator(use_cache=True)
 
@@ -90,7 +90,7 @@ print("TEST 2: Fundamental Analyst Agent (LLM-Powered)")
 print("=" * 60)
 
 if os.getenv("ANTHROPIC_API_KEY"):
-    from fundamental_agent import FundamentalAnalystAgent
+    from investment.agents.fundamental import FundamentalAnalystAgent
     
     agent = FundamentalAnalystAgent()
     

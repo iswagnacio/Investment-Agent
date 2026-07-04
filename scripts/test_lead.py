@@ -1,4 +1,4 @@
-from lead_agent import GeneralAnalystAgent
+from investment.agents.lead import GeneralAnalystAgent
 
 # specialist_agents=False keeps this to a single LLM call (just the perspective)
 agent = GeneralAnalystAgent(use_specialist_agents=False, use_perspective=True)

@@ -20,7 +20,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-import config
+from investment import config
 
 SCHEMA_VERSION = 1
 

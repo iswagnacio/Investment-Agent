@@ -27,7 +27,8 @@ from pathlib import Path
 # Paths (all anchored to the repo root, never the cwd)
 # =============================================================================
 
-ROOT = Path(__file__).resolve().parent
+# config.py lives in the investment/ package; the repo root is one level up.
+ROOT = Path(__file__).resolve().parent.parent
 DATA_DIR = ROOT / "data"
 
 FUNDAMENTAL_CACHE_DIR = DATA_DIR / "fundamental_cache"

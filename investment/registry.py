@@ -30,7 +30,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional
 
-import config
+from investment import config
 
 log = config.get_logger("registry")
 

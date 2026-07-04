@@ -29,27 +29,9 @@ dev = [
 requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
-[tool.setuptools]
-# Flat layout for now; Phase 4 of ROADMAP.md migrates to packages.
-py-modules = [
-    "config",
-    "contracts",
-    "registry",
-    "reporting",
-    "runner",
-    "lead_agent",
-    "technical",
-    "technical_agent",
-    "fundamental",
-    "fundamental_agent",
-    "sentiment",
-    "sentiment_agent",
-    "perspective_agent",
-    "portfolio",
-    "portfolio_agent",
-    "distill_investor",
-    "X_fetch",
-]
+[tool.setuptools.packages.find]
+# Package layout (ROADMAP Phase 4). Root-level *.py files are entrypoint shims.
+include = ["investment*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -10,7 +10,7 @@ by signal track record (data/runs/), not returns.
 
 import pandas as pd
 
-import config
+from investment import config
 from pathlib import Path
 from typing import List
 

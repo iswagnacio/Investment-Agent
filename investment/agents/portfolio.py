@@ -6,10 +6,10 @@ from langchain.prompts import PromptTemplate
 from typing import List
 import json
 
-from portfolio import PortfolioManager
+from investment.universe import PortfolioManager
 from dotenv import load_dotenv
 
-import config
+from investment import config
 load_dotenv()
 
 

@@ -1,10 +1,10 @@
 """Unit tests for the headless runner: config, universe resolution, and the
 diff digest. No network, no LLM — evaluation itself is exercised offline."""
 
-import config
-import runner
-from contracts import AnalysisRecord
-from runner import (
+from investment import config
+import investment.runner as runner
+from investment.contracts import AnalysisRecord
+from investment.runner import (
     TickerOutcome,
     classify_outcome,
     load_runner_config,
@@ -60,7 +60,7 @@ class TestResolveUniverse:
             "status,ticker,shares,cost_basis,date_acquired,notes\n"
             "hold,AVGO,1,1,2026-01-01,\nwatch,MU,0,0,,\n"
         )
-        import portfolio
+        import investment.universe as portfolio
         orig = portfolio.PortfolioManager
         monkeypatch.setattr(portfolio, "PortfolioManager",
                             lambda: orig(csv_path=str(csv)))
@@ -127,7 +127,7 @@ class TestMain:
 
     def test_empty_universe_exit_2(self, monkeypatch, tmp_path):
         monkeypatch.setattr(config, "RUNS_DIR", tmp_path)
-        import portfolio
+        import investment.universe as portfolio
 
         class EmptyPM:
             def get_universe(self):

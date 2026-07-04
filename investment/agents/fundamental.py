@@ -15,7 +15,7 @@ Features:
 - Comprehensive investment thesis generation
 
 Usage:
-    from fundamental_agent import FundamentalAnalystAgent
+    from investment.agents.fundamental import FundamentalAnalystAgent
     
     agent = FundamentalAnalystAgent()
     analysis = agent.analyze("AAPL")
@@ -27,12 +27,12 @@ from typing import Dict, List, Optional
 from datetime import datetime
 from dotenv import load_dotenv
 
-import config
+from investment import config
 
 from langchain_anthropic import ChatAnthropic
 from langchain.prompts import PromptTemplate
 
-from fundamental import FundamentalCalculator
+from investment.calculators.fundamental import FundamentalCalculator
 
 load_dotenv()
 

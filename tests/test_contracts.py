@@ -2,9 +2,9 @@
 
 import json
 
-import config
-from contracts import AnalysisRecord, SCHEMA_VERSION
-from reporting import render_report, render_quick_line
+from investment import config
+from investment.contracts import AnalysisRecord, SCHEMA_VERSION
+from investment.reporting import render_report, render_quick_line
 
 
 def _record(**overrides) -> AnalysisRecord:
@@ -115,7 +115,7 @@ class TestUniverse:
             "watch,MU,0,0,,\n"
             "watch,avgo,0,0,,dup in different case\n"
         )
-        from portfolio import PortfolioManager
+        from investment.universe import PortfolioManager
         pm = PortfolioManager(csv_path=str(csv))
         assert pm.get_universe() == ["AVGO", "MU"]
 
@@ -125,7 +125,7 @@ class TestUniverse:
             "status,ticker,shares,cost_basis,date_acquired,notes\n"
             "hold,AVGO,2.2,224.97,2026-01-01,\n"
         )
-        from portfolio import PortfolioManager
+        from investment.universe import PortfolioManager
         pm = PortfolioManager(csv_path=str(csv))
         summary = pm.get_portfolio_summary()
         assert "AVGO" in summary

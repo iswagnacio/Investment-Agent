@@ -15,7 +15,7 @@ Distillation never happens here. On a cache miss this raises PerspectiveNotCache
 the lead agent catches it, prints a hint, and proceeds without perspective.
 
 Usage:
-    from perspective_agent import PerspectiveAnalystAgent
+    from investment.agents.perspective import PerspectiveAnalystAgent
 
     agent = PerspectiveAnalystAgent()
     result = agent.analyze(
@@ -37,8 +37,8 @@ from dotenv import load_dotenv
 from langchain_anthropic import ChatAnthropic
 from langchain_core.messages import SystemMessage, HumanMessage
 
-import config
-from config import normalize_key as _normalize_key, strip_fences as _strip_fences
+from investment import config
+from investment.config import normalize_key as _normalize_key, strip_fences as _strip_fences
 
 load_dotenv()
 
@@ -328,7 +328,7 @@ if __name__ == "__main__":
     # minimal smoke test: pull fundamentals via the existing calculator if present
     fund = None
     try:
-        from fundamental import FundamentalCalculator
+        from investment.calculators.fundamental import FundamentalCalculator
         fund = FundamentalCalculator().get_all_fundamentals(args.ticker.upper())
     except Exception as e:
         print(f"(no fundamental data: {e})")

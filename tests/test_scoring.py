@@ -7,14 +7,13 @@ functions plus the perspective post-blend math on a bare agent instance
 
 import pytest
 
-import config
-from lead_agent import (
+from investment import config
+from investment.agents.lead import (
     GeneralAnalystAgent,
-    ScoreCalculator,
-    Signal,
     extract_json_from_text,
     validate_ticker_in_text,
 )
+from investment.scoring import ScoreCalculator, Signal
 
 
 class TestOverallScore:
