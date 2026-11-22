@@ -1,0 +1,6 @@
+{
+  "model": "glm-5.3-flash",
+  "reasoning_effort": "low",
+  "inputs_sha256": "f883147289ea297104a3159a4098371cadc6db56ad698d561724cacd3e792b79",
+  "runner_sha256": "34db1244785c8fcb983df5b85088ab559e41f7bce25bce0528e124decd9defd2"
+}
