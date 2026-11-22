@@ -35,8 +35,8 @@ import glob
 from typing import Dict, List, Optional, Any
 from dotenv import load_dotenv
 
-from langchain_anthropic import ChatAnthropic
 from langchain_core.messages import SystemMessage, HumanMessage
+from llm import create_chat_model
 
 load_dotenv()
 
@@ -80,10 +80,8 @@ class PerspectiveAnalystAgent:
 
     def __init__(self, model: str = "claude-sonnet-4-5",
                  cache_dir: str = "data/perspectives_cache"):
-        if not os.getenv("ANTHROPIC_API_KEY"):
-            raise ValueError("ANTHROPIC_API_KEY environment variable not set")
         self.cache_dir = cache_dir
-        self.llm = ChatAnthropic(model_name=model, temperature=0, max_tokens=4096)
+        self.llm = create_chat_model(model)
 
     # =========================================================================
     # Cache reads (the offline distiller is the only writer)

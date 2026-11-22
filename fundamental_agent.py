@@ -21,14 +21,13 @@ Usage:
     analysis = agent.analyze("AAPL")
 """
 
-import os
 import json
 from typing import Dict, List, Optional
 from datetime import datetime
 from dotenv import load_dotenv
 
-from langchain_anthropic import ChatAnthropic
 from langchain.prompts import PromptTemplate
+from llm import create_chat_model
 
 from fundamental import FundamentalCalculator
 
@@ -44,11 +43,8 @@ class FundamentalAnalystAgent:
     """
     
     def __init__(self, model: str = "claude-sonnet-4-5"):
-        if not os.getenv("ANTHROPIC_API_KEY"):
-            raise ValueError("ANTHROPIC_API_KEY environment variable not set")
-        
+        self.llm = create_chat_model(model)
         self.calculator = FundamentalCalculator()
-        self.llm = ChatAnthropic(model_name=model, temperature=0, max_tokens=4096)
     
     def analyze(self, ticker: str, analysis_type: str = "comprehensive") -> str:
         """

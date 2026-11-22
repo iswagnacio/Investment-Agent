@@ -19,13 +19,12 @@ Usage:
     signals = agent.analyze("AAPL")  # Returns structured JSON string
 """
 
-import os
 import json
 from typing import Dict, List, Optional
 from datetime import datetime
 from dotenv import load_dotenv
 
-from langchain_anthropic import ChatAnthropic
+from llm import create_chat_model
 
 from sentiment import SentimentDataFetcher
 from technical import TechnicalCalculator  # For stock_info lookup
@@ -54,11 +53,8 @@ class SentimentAnalystAgent:
     """
     
     def __init__(self, model: str = "claude-sonnet-4-5"):
-        if not os.getenv("ANTHROPIC_API_KEY"):
-            raise ValueError("ANTHROPIC_API_KEY environment variable not set")
-        
+        self.llm = create_chat_model(model, max_tokens=2048)
         self.fetcher = SentimentDataFetcher()
-        self.llm = ChatAnthropic(model_name=model, temperature=0, max_tokens=2048)
         
         # For getting company name/industry
         self._tech_calc = TechnicalCalculator()

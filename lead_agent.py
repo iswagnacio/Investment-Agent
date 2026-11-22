@@ -28,7 +28,6 @@ Usage:
     rec = agent.get_recommendation("TSLA")
 """
 
-import os
 import json
 import re
 from typing import Dict, List, Optional, Tuple, Any
@@ -37,8 +36,8 @@ from dataclasses import dataclass
 from enum import Enum
 from dotenv import load_dotenv
 
-from langchain_anthropic import ChatAnthropic
 from langchain_core.prompts import PromptTemplate
+from llm import create_chat_model
 
 # Import analysis modules
 from technical import TechnicalCalculator
@@ -686,8 +685,7 @@ class GeneralAnalystAgent:
     """
     
     def __init__(self, model: str = "claude-sonnet-4-5", use_specialist_agents: bool = True, use_perspective: bool = False):
-        if not os.getenv("ANTHROPIC_API_KEY"):
-            raise ValueError("ANTHROPIC_API_KEY environment variable not set")
+        self.llm = create_chat_model(model)
         
         self.technical = TechnicalCalculator()
         self.fundamental = FundamentalCalculator()
@@ -726,8 +724,6 @@ class GeneralAnalystAgent:
             except Exception as e:
                 print(f"Warning: Could not initialize PerspectiveAnalystAgent: {e}")
 
-        self.llm = ChatAnthropic(model_name=model, temperature=0, max_tokens=4096)
-    
     def gather_data(self, ticker: str, perspective: str = None) -> Dict[str, Any]:
         """
         Gather all data for analysis.
@@ -2031,6 +2027,8 @@ if __name__ == "__main__":
     
     parser = argparse.ArgumentParser(description='General Analyst Agent')
     parser.add_argument('tickers', nargs='+', help='Stock ticker(s) to analyze')
+    parser.add_argument('--model', default='claude-sonnet-4-5',
+                        help='Chat model ID, for example glm-5.3-flash')
     parser.add_argument('--quick', '-q', action='store_true', 
                        help='Quick recommendation only (no LLM analysis)')
     parser.add_argument('--compare', '-c', action='store_true',
@@ -2043,7 +2041,7 @@ if __name__ == "__main__":
                         help='Perspective weight 0–0.25 (default 0.15)')
     args = parser.parse_args()
     
-    agent = GeneralAnalystAgent(use_perspective=bool(args.perspective))
+    agent = GeneralAnalystAgent(model=args.model, use_perspective=bool(args.perspective))
     
     if args.screen:
         print(agent.screen_portfolio(args.tickers))
