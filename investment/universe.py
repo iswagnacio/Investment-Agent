@@ -18,13 +18,16 @@ from typing import List
 class PortfolioManager:
     """Manages the ticker universe stored in holdings.csv."""
 
-    def __init__(self, csv_path: str = str(config.HOLDINGS_CSV)):
+    def __init__(self, csv_path: str = str(config.HOLDINGS_CSV), *, read_only: bool = False):
         self.csv_path = Path(csv_path)
+        self.read_only = read_only
         self._ensure_file_exists()
 
     def _ensure_file_exists(self):
         """Create portfolio file if it doesn't exist"""
         if not self.csv_path.exists():
+            if self.read_only:
+                raise ValueError("Read-only portfolio data is unavailable.")
             df = pd.DataFrame(columns=[
                 'status', 'ticker', 'shares', 'cost_basis',
                 'date_acquired', 'notes'
@@ -55,6 +58,8 @@ class PortfolioManager:
         result = "Current Holdings:\n\n"
         for _, row in holdings.iterrows():
             result += f"• {row['ticker']} (since {row['date_acquired']})"
+            shares = row['shares'] if pd.notna(row['shares']) else 'Unavailable'
+            result += f" — Shares: {shares}"
             if pd.notna(row['notes']) and row['notes']:
                 result += f" — {row['notes']}"
             result += "\n"
@@ -86,8 +91,11 @@ class PortfolioManager:
             return f"No position found for {ticker}."
 
         row = position.iloc[0]
+        shares = row['shares'] if pd.notna(row['shares']) else 'Unavailable'
+        quantity = f"Shares: {shares}\n" if row['status'] == 'hold' else ""
         return (f"{'Position' if row['status'] == 'hold' else 'Watchlist item'}: {row['ticker']}\n"
                 f"Status: {row['status']}\n"
+                f"{quantity}"
                 f"Date Acquired: {row['date_acquired'] if pd.notna(row['date_acquired']) else '—'}\n"
                 f"Notes: {row['notes'] if pd.notna(row['notes']) else 'None'}")
 
@@ -95,6 +103,8 @@ class PortfolioManager:
                     date_acquired: str, notes: str = "") -> str:
         """Record a held ticker. shares/cost_basis are stored for the CSV's
         historical shape but are not used in any calculation."""
+        if self.read_only:
+            raise PermissionError("This portfolio is read-only.")
         df = self.read_portfolio()
 
         if ticker.upper() in df['ticker'].str.upper().values:
@@ -116,6 +126,8 @@ class PortfolioManager:
 
     def add_to_watchlist(self, ticker: str, notes: str = "") -> str:
         """Add a ticker to watchlist"""
+        if self.read_only:
+            raise PermissionError("This portfolio is read-only.")
         df = self.read_portfolio()
 
         if ticker.upper() in df['ticker'].str.upper().values:

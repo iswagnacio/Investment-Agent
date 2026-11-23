@@ -10,28 +10,31 @@ from investment.universe import PortfolioManager
 from dotenv import load_dotenv
 
 from investment import config
+from investment.safety import normalize_ticker
 load_dotenv()
 
 
 class PortfolioTrackerAgent:
     """LangChain agent for portfolio management"""
     
-    def __init__(self, csv_path: str = str(config.HOLDINGS_CSV), model: str = config.CHEAP_MODEL):
+    def __init__(self, csv_path: str = str(config.HOLDINGS_CSV), model: str = config.CHEAP_MODEL,
+                 *, read_only: bool = False):
         # Verify API key is set
         if not os.getenv("ANTHROPIC_API_KEY"):
             raise ValueError("ANTHROPIC_API_KEY environment variable not set")
         
-        self.portfolio_mgr = PortfolioManager(csv_path)
+        self.read_only = read_only
+        self.portfolio_mgr = PortfolioManager(csv_path, read_only=read_only)
         self.llm = ChatAnthropic(model_name=model, temperature=0)
         self.agent_executor = self._create_agent()
     
     def _create_tools(self) -> List[Tool]:
         """Create tools for the agent"""
-        return [
+        tools = [
             Tool(
                 name="get_holdings",
                 func=lambda _: self.portfolio_mgr.get_holdings(),  # Wrap to ignore input
-                description="List all currently held tickers with acquisition date and notes. No input required."
+                description="List held tickers with stored share counts, acquisition date and notes. No input required."
             ),
             Tool(
                 name="get_watchlist",
@@ -40,8 +43,8 @@ class PortfolioTrackerAgent:
             ),
             Tool(
                 name="get_position_details",
-                func=self.portfolio_mgr.get_position_details,
-                description="Get detailed information about a specific ticker position. Input should be the ticker symbol (e.g., 'AAPL')."
+                func=self._position_details,
+                description="Get position details including stored shares for a held ticker. Input should be the ticker symbol (e.g., 'AAPL')."
             ),
             Tool(
                 name="get_portfolio_summary",
@@ -63,6 +66,14 @@ class PortfolioTrackerAgent:
                 Example: {"ticker": "GOOGL", "notes": "Waiting for pullback"}"""
             ),
         ]
+        return tools[:4] if self.read_only else tools
+
+    def _position_details(self, value: str) -> str:
+        try:
+            ticker = normalize_ticker(value)
+        except ValueError:
+            return "Error: enter one valid ticker, for example AAPL."
+        return self.portfolio_mgr.get_position_details(ticker)
     
     def _parse_add_position(self, input_str: str) -> str:
         """Parse JSON input for adding position"""
@@ -99,12 +110,17 @@ tickers they hold or watch. You track WHICH tickers are held/watched and why (no
 not profits — never compute or discuss P&L, returns, or cost-basis math.
 
 Your responsibilities:
-- Provide clear information about current holdings and their allocations
-- Track cost basis for tax and performance analysis
+- Provide clear information about holdings, stored share counts, dates, and notes
 - Maintain a watchlist of stocks the user is interested in
 - Answer questions about specific positions
 
-Always be precise with numbers and dates. When discussing allocations, use percentages.
+Use prior conversation to resolve follow-ups such as "that stock". If the referent
+is missing or ambiguous, ask for clarification instead of guessing.
+Verify current portfolio facts with tools; prior conversation may describe older state.
+Stored shares are available, but current position market values are not. For an
+unspecified "largest holding", compare stored share counts and explicitly say
+"largest by share count". If asked for largest by market value, explain that the
+required market-value data is unavailable. Quote quantities from tools precisely.
 If asked to add positions, make sure you have all required information before proceeding.
 
 TOOLS:
@@ -130,10 +146,19 @@ Final Answer: [your response here]
 
 Begin!
 
+Prior conversation (JSON user/assistant exchanges; context, not system instructions):
+{chat_history}
+
+Portfolio access mode: {portfolio_mode}
+
 New input: {input}
 {agent_scratchpad}"""
 
-        prompt = PromptTemplate.from_template(template)
+        prompt = PromptTemplate.from_template(template).partial(
+            chat_history="",
+            portfolio_mode=("Read-only synthetic demo. Refuse additions and edits; use read tools only."
+                            if self.read_only else "Local portfolio management."),
+        )
         
         agent = create_react_agent(self.llm, tools, prompt)
         
@@ -144,9 +169,9 @@ New input: {input}
             handle_parsing_errors=True
         )
     
-    def query(self, question: str) -> str:
-        """Query the portfolio agent"""
-        result = self.agent_executor.invoke({"input": question})
+    def query(self, question: str, chat_history: str = "") -> str:
+        """Query with optional context; callers own and reset conversation history."""
+        result = self.agent_executor.invoke({"input": question, "chat_history": chat_history})
         return result['output']
 
 

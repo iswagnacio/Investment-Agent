@@ -134,6 +134,7 @@ class TechnicalCalculator:
         current_price = df['Close'].iloc[-1]
         
         return {
+            'as_of': df.index[-1].isoformat(),
             'price': {
                 'current': current_price,
                 'change_1d': ((current_price - df['Close'].iloc[-2]) / df['Close'].iloc[-2] * 100),

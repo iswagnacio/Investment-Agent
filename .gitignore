@@ -1,10 +1,18 @@
 .env
+.env.*
+!.env.example
+.venv/
+venv/
+.streamlit/secrets.toml
+holdings.csv
 .DS_Store
 __pycache__/
 yfinance_cache.sqlite
 .yf_cache/
 .pytest_cache/
 *.egg-info/
+dist/
+build/
 
 # data/ is transient cache EXCEPT run history (the system's memory: Phase 2
 # diffs consecutive records; Phase 3 weights agents by track record).

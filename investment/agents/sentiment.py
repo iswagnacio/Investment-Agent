@@ -142,13 +142,15 @@ class SentimentAnalystAgent:
             for i, article in enumerate(articles[:20], 1):
                 date_str = ""
                 try:
+                    if not article.metadata.get("publication_date_verified"):
+                        raise ValueError("Publication date unavailable")
                     pub = article.published_at
                     if pub.tzinfo:
                         pub = pub.replace(tzinfo=None)
                     days_ago = (datetime.now() - pub).days
                     date_str = f"{days_ago}d ago" if days_ago > 0 else "today"
                 except Exception:
-                    date_str = "recent"
+                    date_str = "publication date unavailable"
                 
                 sentiment_str = ""
                 if article.sentiment_hint is not None:

@@ -27,7 +27,7 @@ import time
 import hashlib
 import logging
 from abc import ABC, abstractmethod
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from dataclasses import dataclass, field
 from typing import Optional, List, Dict, Any
 from enum import Enum
@@ -91,6 +91,14 @@ class NewsArticle:
     sentiment_hint: Optional[float] = None
     keywords: List[str] = field(default_factory=list)
     metadata: Dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self):
+        self.metadata = dict(self.metadata)
+        self.metadata.setdefault("publication_date_verified", self.published_at != datetime.min)
+
+    @property
+    def publication_label(self) -> str:
+        return self.published_at.strftime('%Y-%m-%d') if self.metadata.get('publication_date_verified') else 'Publication date unavailable'
     
     def to_dict(self) -> Dict:
         return {
@@ -110,7 +118,8 @@ class NewsArticle:
             url=data.get('url'), category=ContentCategory(data.get('category', 'company')),
             ticker=data.get('ticker'), industry=data.get('industry'),
             sentiment_hint=data.get('sentiment_hint'), keywords=data.get('keywords', []),
-            metadata=data.get('metadata', {})
+            metadata={**data.get('metadata', {}),
+                      'publication_date_verified': data.get('metadata', {}).get('publication_date_verified', False)}
         )
 
 
@@ -198,16 +207,17 @@ class BaseFetcher(ABC):
             response.raise_for_status()
             return response.json()
         except Exception as e:
-            logger.error(f"Request error: {e}")
+            logger.error("News request failed (%s)", type(e).__name__)
             return None
     
     def _parse_datetime(self, dt_string: str) -> datetime:
-        for fmt in ['%Y-%m-%dT%H:%M:%SZ', '%Y-%m-%dT%H:%M:%S.%fZ', '%Y-%m-%dT%H:%M:%S%z', '%Y-%m-%d %H:%M:%S', '%Y-%m-%d']:
+        for fmt in ['%Y-%m-%dT%H:%M:%SZ', '%Y-%m-%dT%H:%M:%S.%fZ', '%Y-%m-%dT%H:%M:%S%z', '%Y-%m-%d %H:%M:%S', '%Y-%m-%d', '%Y%m%dT%H%M%S']:
             try:
-                return datetime.strptime(dt_string, fmt)
+                parsed = datetime.strptime(dt_string, fmt)
+                return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
             except (ValueError, TypeError):
                 continue
-        return datetime.now()
+        return datetime.min
     
     def _create_error_result(self, error_msg: str) -> FetchResult:
         return FetchResult(success=False, source=self.source, error=error_msg)
@@ -246,9 +256,9 @@ class YahooFinanceFetcher(BaseFetcher):
                     
                     # Parse datetime from ISO format
                     try:
-                        published_at = datetime.fromisoformat(pub_time.replace('Z', '+00:00')) if pub_time else datetime.now()
+                        published_at = datetime.fromisoformat(pub_time.replace('Z', '+00:00')) if pub_time else datetime.min
                     except:
-                        published_at = datetime.now()
+                        published_at = datetime.min
                 else:
                     # Old structure: data at top level
                     title = item.get('title', '')
@@ -256,7 +266,7 @@ class YahooFinanceFetcher(BaseFetcher):
                     publisher = item.get('publisher', 'Yahoo Finance')
                     pub_time = item.get('providerPublishTime', 0)
                     url = item.get('link', '')
-                    published_at = datetime.fromtimestamp(pub_time) if isinstance(pub_time, (int, float)) else datetime.now()
+                    published_at = datetime.fromtimestamp(pub_time) if isinstance(pub_time, (int, float)) else datetime.min
                 
                 if title:  # Only add if we have a title
                     articles.append(NewsArticle(
@@ -424,7 +434,7 @@ class AlphaVantageFetcher(BaseFetcher):
                 source=item.get('source', 'Alpha Vantage'), source_type=self.source,
                 published_at=self._parse_datetime(item.get('time_published', '')),
                 url=item.get('url'), category=ContentCategory.COMPANY, ticker=query.upper(),
-                sentiment_hint=item.get('overall_sentiment_score', 0),
+                sentiment_hint=item.get('overall_sentiment_score'),
                 keywords=[t.get('topic') for t in item.get('topics', [])],
                 metadata={'sentiment_label': item.get('overall_sentiment_label'), 'ticker_sentiments': ticker_sentiments}
             ))
@@ -466,8 +476,12 @@ class SentimentDataFetcher:
         if use_cache and self.cache:
             cached = self.cache.get(cache_key, 'company')
             if cached:
-                return {'success': True, 'ticker': ticker, 'articles': [NewsArticle.from_dict(a) for a in cached],
-                       'total_count': len(cached), 'from_cache': True, 'sources_used': ['cache']}
+                articles = [NewsArticle.from_dict(a) for a in cached]
+                errors = sorted({error for article in articles
+                                 for error in article.metadata.get('unavailable_sources', [])})
+                return {'success': True, 'ticker': ticker, 'articles': articles,
+                       'total_count': len(cached), 'from_cache': True, 'sources_used': ['cache'],
+                       'errors': errors or None}
         
         all_articles, sources_used, errors = [], [], []
         items_per_source = max(5, max_items // 4)
@@ -478,7 +492,7 @@ class SentimentDataFetcher:
             all_articles.extend(result.articles)
             sources_used.append('yahoo_finance')
         elif result.error:
-            errors.append(f"Yahoo: {result.error}")
+            errors.append("Yahoo company news unavailable")
         
         # Finnhub
         if self.available_sources['finnhub']:
@@ -486,6 +500,8 @@ class SentimentDataFetcher:
             if result.success and result.articles:
                 all_articles.extend(result.articles)
                 sources_used.append('finnhub')
+            elif result.error or not result.success:
+                errors.append("Finnhub company news unavailable")
         
         # Alpha Vantage (includes sentiment!)
         if self.available_sources['alphavantage']:
@@ -493,6 +509,8 @@ class SentimentDataFetcher:
             if result.success and result.articles:
                 all_articles.extend(result.articles)
                 sources_used.append('alphavantage')
+            elif result.error or not result.success:
+                errors.append("Alpha Vantage company news unavailable")
         
         # NewsAPI (search by company name)
         if self.available_sources['newsapi'] and company_name:
@@ -502,6 +520,8 @@ class SentimentDataFetcher:
                     a.ticker = ticker
                 all_articles.extend(result.articles)
                 sources_used.append('newsapi')
+            elif result.error or not result.success:
+                errors.append("NewsAPI company news unavailable")
         
         # Deduplicate
         seen, unique = set(), []
@@ -513,11 +533,13 @@ class SentimentDataFetcher:
         unique.sort(key=lambda x: self._normalize_datetime(x.published_at), reverse=True)
         unique = unique[:max_items]
         
+        for article in unique:
+            article.metadata['unavailable_sources'] = sorted(errors)
         if self.cache and unique:
             self.cache.set(cache_key, [a.to_dict() for a in unique], 'company')
         
         return {'success': True, 'ticker': ticker, 'company_name': company_name, 'articles': unique,
-               'total_count': len(unique), 'from_cache': False, 'sources_used': sources_used, 'errors': errors or None}
+               'total_count': len(unique), 'from_cache': False, 'sources_used': sources_used, 'errors': sorted(errors) or None}
     
     def fetch_industry_news(self, industry: str, max_items: int = 20, use_cache: bool = True) -> Dict:
         """Fetch news related to an industry sector."""
@@ -599,7 +621,7 @@ class SentimentDataFetcher:
             sections.append("=== COMPANY NEWS ===")
             for i, a in enumerate(data['company_news']['articles'][:max_items], 1):
                 sentiment = f" [Sentiment: {a.sentiment_hint:.2f}]" if a.sentiment_hint else ""
-                sections.append(f"\n[{i}] {a.title}\nSource: {a.source} | {a.published_at:%Y-%m-%d}{sentiment}\n{a.content[:400]}...")
+                sections.append(f"\n[{i}] {a.title}\nSource: {a.source} | {a.publication_label}{sentiment}\n{a.content[:400]}...")
         
         if data['industry_news'] and data['industry_news'].get('articles'):
             sections.append("\n\n=== INDUSTRY NEWS ===")

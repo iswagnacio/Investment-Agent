@@ -31,7 +31,7 @@ Usage:
 import os
 import json
 import re
-from typing import Dict, List, Optional, Tuple, Any
+from typing import Dict, List, Optional, Tuple, Any, Callable
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
 
@@ -1260,7 +1260,8 @@ Begin your analysis of {ticker}:"""
     
     def analyze_to_record(self, ticker: str, perspective: str = None,
                           perspective_weight: float = config.DEFAULT_PERSPECTIVE_WEIGHT,
-                          save: bool = True) -> AnalysisRecord:
+                          save: bool = True,
+                          data_validator: Optional[Callable[[Dict[str, Any]], Any]] = None) -> AnalysisRecord:
         """Run a full evaluation and return (and by default persist) the AnalysisRecord.
 
         This is the headless entrypoint the Phase 2 runner uses; analyze() is
@@ -1270,6 +1271,8 @@ Begin your analysis of {ticker}:"""
 
         print(f"Gathering data for {ticker}...")
         data = self.gather_data(ticker, perspective=perspective)
+        if data_validator is not None:
+            data_validator(data)
 
         print("Calculating scores...")
         scores = self.calculate_scores(data, perspective_weight=perspective_weight)
@@ -1284,10 +1287,13 @@ Begin your analysis of {ticker}:"""
         return record
 
     def analyze(self, ticker: str, perspective: str = None,
-                perspective_weight: float = config.DEFAULT_PERSPECTIVE_WEIGHT) -> str:
+                perspective_weight: float = config.DEFAULT_PERSPECTIVE_WEIGHT, *,
+                save: bool = True,
+                data_validator: Optional[Callable[[Dict[str, Any]], Any]] = None) -> str:
         """Run a full evaluation, persist the AnalysisRecord, return the rendered report."""
         record = self.analyze_to_record(ticker, perspective=perspective,
-                                        perspective_weight=perspective_weight)
+                                        perspective_weight=perspective_weight, save=save,
+                                        data_validator=data_validator)
         return render_report(record)
 
     def build_record(self, data: Dict[str, Any], scores: Dict[str, Any],
